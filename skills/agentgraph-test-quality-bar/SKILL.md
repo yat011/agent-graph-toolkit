@@ -1,5 +1,5 @@
 ---
-name: test-quality-bar
+name: agentgraph-test-quality-bar
 description: What makes an automated test worth keeping — seams, anti-patterns, coverage floor. Use when writing or updating tests for a code change in this project.
 ---
 

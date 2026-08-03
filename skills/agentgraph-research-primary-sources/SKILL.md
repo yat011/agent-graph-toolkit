@@ -1,5 +1,5 @@
 ---
-name: research-primary-sources
+name: agentgraph-research-primary-sources
 description: Primary-source and citation discipline for research findings. Use when investigating external docs/APIs or summarizing codebase behavior.
 ---
 

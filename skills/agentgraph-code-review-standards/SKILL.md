@@ -1,5 +1,5 @@
 ---
-name: code-review-standards
+name: agentgraph-code-review-standards
 description: Two-axis (Standards vs Spec) review structure plus a Fowler smell-baseline checklist. Use when reviewing a diff against project conventions and the originating spec/plan.
 ---
 

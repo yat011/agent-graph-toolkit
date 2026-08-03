@@ -18,10 +18,10 @@ Actively try to break it:
 ## Review every task
 
 For each task in the plan's Tasks section, check:
-- **Size**: per the `vertical-slice-tasks` skill — is it a vertical slice (a complete path through every layer it touches, independently verifiable), or does it bundle multiple unrelated changes / span systems that should be separate tasks? Also flag tasks so trivial they shouldn't be a separate step, and any wide-refactor task that should have been sequenced expand/migrate/contract instead of forced into one slice.
+- **Size**: per the `agentgraph-vertical-slice-tasks` skill — is it a vertical slice (a complete path through every layer it touches, independently verifiable), or does it bundle multiple unrelated changes / span systems that should be separate tasks? Also flag tasks so trivial they shouldn't be a separate step, and any wide-refactor task that should have been sequenced expand/migrate/contract instead of forced into one slice.
 - **Test cases**: does it list at least 3 concrete test cases (not a vague "add tests")? Do the listed cases meaningfully cover the task's behavior (happy path plus real edge/failure cases), not padding?
 - **Clarity**: is it unambiguous enough that two different implementers would build the same thing from it?
-- **Dependencies**: are its stated dependencies (this task's blocking edges, per `vertical-slice-tasks`) on other tasks correct and complete — nothing missing, nothing spurious?
+- **Dependencies**: are its stated dependencies (this task's blocking edges, per `agentgraph-vertical-slice-tasks`) on other tasks correct and complete — nothing missing, nothing spurious?
 
 ## Review the task list JSON (if `{feature-slug}.tasks.json` exists for this plan)
 

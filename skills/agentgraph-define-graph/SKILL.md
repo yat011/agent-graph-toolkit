@@ -1,20 +1,20 @@
 ---
-name: define-graph
+name: agentgraph-define-graph
 description: Use when the user wants to turn a written plan into an executable agent graph for review — e.g. "define a graph for this plan", "turn this plan into a graph", "break this plan into nodes". Reads a plan file, breaks it into nodes, writes agent_works/graphs/{graph-name}/graph.md, and iterates with the user until they confirm it. Does not execute the graph — that's a separate skill.
 ---
 
-# define-graph
+# agentgraph-define-graph
 
 Turns a written plan (`agent_works/plans/*.md`) into an `agent_works/graphs/{graph-name}/graph.md`
 file per the shared spec, and iterates with the user on the design until they confirm it.
 
-**This skill only writes `graph.md`. It never calls `run-graph`, never dispatches an `Agent` tool
+**This skill only writes `graph.md`. It never calls `agentgraph-run-graph`, never dispatches an `Agent` tool
 call, and never executes any node.** Defining a graph and running a graph are separate skills —
-running is out of scope here even if the user seems eager to proceed; hand off to the `run-graph`
+running is out of scope here even if the user seems eager to proceed; hand off to the `agentgraph-run-graph`
 skill (or ask them to invoke it) once they confirm.
 
 Before doing anything else, read `GRAPH-SPEC.md` in this same skill directory
-(`.claude/skills/define-graph/GRAPH-SPEC.md`) in full. It is the single source of truth for the
+(`.claude/skills/agentgraph-define-graph/GRAPH-SPEC.md`) in full. It is the single source of truth for the
 file layout and the `graph.md` schema (node types, `deps`, `retry`, `agent`, `ref`, `map_over`,
 `branches`, the ASCII diagram block, the worked example). Do not re-derive or duplicate that format from
 memory — follow it exactly as written there.
@@ -117,4 +117,4 @@ rewire a node, regenerate the diagram in the same edit.
   diagram together, keeping them in sync), then show the updated diagram and summary again.
 - Repeat until the user explicitly confirms. Do not proceed to running the graph yourself at any
   point — once confirmed, tell the user the graph is ready and that running it is a separate step
-  (the `run-graph` skill), and stop.
+  (the `agentgraph-run-graph` skill), and stop.

@@ -15,7 +15,7 @@ line-level details. If you genuinely find nothing wrong after actively looking, 
 rather than padding the report with nitpicks to seem thorough.
 
 Judge the diff along two independent axes and report them under separate `## Standards` / `##
-Spec` headings — never merge or rerank findings across them, per the `code-review-standards`
+Spec` headings — never merge or rerank findings across them, per the `agentgraph-code-review-standards`
 skill (that's also where the smell-baseline checklist and the Spec-axis checklist live). Within
 each axis, cite findings as file:line and rank most-severe first. Do not comment on style nitpicks
 unless they violate a stated project rule or named smell.

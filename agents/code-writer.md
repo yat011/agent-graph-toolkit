@@ -13,7 +13,7 @@ Write the minimal correct change. Do not add abstractions, error handling, or sc
 was asked. Report back what you changed with file:line references.
 
 When your change alters or adds behavior, write or update the corresponding test(s) covering it —
-follow the `test-quality-bar` skill for what makes those tests worth keeping. If the surrounding
+follow the `agentgraph-test-quality-bar` skill for what makes those tests worth keeping. If the surrounding
 code has no test infrastructure to hook into, say so explicitly in your report rather than
 skipping tests silently.
 

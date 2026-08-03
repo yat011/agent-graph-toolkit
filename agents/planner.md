@@ -31,7 +31,7 @@ Using both research outputs (cite file:line for codebase claims, URLs for extern
 
 Write a **Tasks** section: an ordered, numbered list of discrete tasks. Every task must have:
 
-- **Reasonable size** — follow the `vertical-slice-tasks` skill for sizing and sequencing (cut vertical not horizontal, prefactor first, dependencies as blocking edges, the wide-refactor exception). Completable by one implementer/subagent in one focused pass without further design decisions — if a task would span multiple unrelated systems or bundle two independent changes, split it; if it's trivial enough to not warrant its own step, fold it into its neighbor.
+- **Reasonable size** — follow the `agentgraph-vertical-slice-tasks` skill for sizing and sequencing (cut vertical not horizontal, prefactor first, dependencies as blocking edges, the wide-refactor exception). Completable by one implementer/subagent in one focused pass without further design decisions — if a task would span multiple unrelated systems or bundle two independent changes, split it; if it's trivial enough to not warrant its own step, fold it into its neighbor.
 - **At least 3 test cases**, listed explicitly as a sub-list under the task (e.g. happy path, at least one edge case, at least one failure/invalid-input case as applicable) — per this project's testing conventions. These are what `code-writer` implements against and `reviewer` checks coverage against later, so make them concrete, not "add tests."
 - Explicit **dependencies** on any earlier task whose output it needs.
 

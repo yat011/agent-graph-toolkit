@@ -1,7 +1,7 @@
 # Agent Graph Format — Spec
 
 This document is the single source of truth for the "agent graph" file format used by the
-`define-graph` and `run-graph` skills. Both skills reference this file instead of each
+`agentgraph-define-graph` and `agentgraph-run-graph` skills. Both skills reference this file instead of each
 re-describing the format. It is not itself an invocable skill.
 
 An agent graph turns a written plan into an executable graph of subagent-call "nodes". The
@@ -232,11 +232,11 @@ in a complete graph.md they would be ordinary `## {seq}_{node-id}` sections like
 
 ## Conventions
 
-These conventions are normative and apply verbatim to both `define-graph` and `run-graph`.
+These conventions are normative and apply verbatim to both `agentgraph-define-graph` and `agentgraph-run-graph`.
 
 - **Aggregation convention, no new node type.** A node that `deps` on a map node reads every
   `item-*/attempt-{latest}/output.md` under the map node's current attempt folder as its input.
-  `define-graph` is responsible for wiring this into the downstream node's prompt explicitly
+  `agentgraph-define-graph` is responsible for wiring this into the downstream node's prompt explicitly
   (e.g. "read all files matching `.../02_per_task_impl/attempt-1/item-*/attempt-*/output.md`")
   — there is no separate collector/reduce node type.
 
@@ -244,7 +244,7 @@ These conventions are normative and apply verbatim to both `define-graph` and `r
   executions and no human in the loop to interrupt a runaway graph, so any node whose `branches`
   can route back to an earlier node (a loop-back) must make the loop bounded through its own
   condition text — e.g. `"Reject, attempted 3 times"` routing to a manual-review terminal instead
-  of looping again. `define-graph` must never author an unbounded loop-back condition.
+  of looping again. `agentgraph-define-graph` must never author an unbounded loop-back condition.
 
 - **Result-line convention for branching.** Every node whose section in `graph.md` declares
   `branches` must have its prompt instruct the subagent to end `output.md` with a single-line
@@ -261,8 +261,8 @@ These conventions are normative and apply verbatim to both `define-graph` and `r
   would be. This lets a node earlier in the graph (e.g. one that authors a fresh graph per run,
   such as a planning node) decide, at runtime, which graph the later subgraph node actually
   executes. If the named node's latest `output.md` has no `Graph:` line when the `ref_from` node
-  is reached, `run-graph` treats it as a technical failure (subject to `retry`, then
-  `halt_reason: retries_exhausted`) rather than guessing — so `define-graph` should route around a
+  is reached, `agentgraph-run-graph` treats it as a technical failure (subject to `retry`, then
+  `halt_reason: retries_exhausted`) rather than guessing — so `agentgraph-define-graph` should route around a
   `ref_from` node via `branches` whenever the graph-producing node might legitimately not produce
   one (e.g. it was rejected/blocked instead of approved), rather than let it be reached in that
   state.
@@ -274,24 +274,24 @@ These conventions are normative and apply verbatim to both `define-graph` and `r
   per-item template body is **not** itself dispatched as a prompt to any agent in this case — so
   the usual "the subagent reads this text" framing doesn't apply. Instead, after `{{item}}` /
   `{{item.field}}` substitution, the template body is written to
-  `item-{i}/attempt-1/context.md` before recursion begins, and `run-graph` appends its content to
+  `item-{i}/attempt-1/context.md` before recursion begins, and `agentgraph-run-graph` appends its content to
   the prompt of every node dispatched anywhere in that nested run (not only its entry points) —
-  exactly as it would treat text "given directly as part of the run-graph request" for a
+  exactly as it would treat text "given directly as part of the agentgraph-run-graph request" for a
   top-level invocation, which is likewise available to whichever node's own prompt actually asks
   for it, not scoped to entry points. Which specific node needs the context depends entirely on
   the target graph's own structure (e.g. a graph that gates on a precondition before its real
   entry-point node, the way a per-task subgraph might check an external dependency's availability
-  before implementing). `define-graph` must phrase a map-of-subgraphs template's body as the
+  before implementing). `agentgraph-define-graph` must phrase a map-of-subgraphs template's body as the
   context itself (what the nested run needs to know), not as an instruction telling a subagent to
   "pass this through" — no subagent receives that instruction directly.
 
 - **Retry idempotency note.** `retry` re-runs a node's subagent from scratch after technical
   failure. If a node's prompt performs external side effects (file writes, tool calls) that
-  aren't safe to repeat, `define-graph` should phrase that node's prompt to check existing state
+  aren't safe to repeat, `agentgraph-define-graph` should phrase that node's prompt to check existing state
   before acting (e.g. "if X already exists, treat as done") rather than assuming a clean slate —
-  `run-graph` itself does not attempt any de-duplication.
+  `agentgraph-run-graph` itself does not attempt any de-duplication.
 
-- **Checkpoint-every-node.** `run-graph` writes/updates `run-state.json` immediately after each
+- **Checkpoint-every-node.** `agentgraph-run-graph` writes/updates `run-state.json` immediately after each
   node execution completes (success, failure, or halt) — not only at the end of a run — so
   resume is always accurate, including partially-completed map fan-outs and nested sub-graph
   runs.

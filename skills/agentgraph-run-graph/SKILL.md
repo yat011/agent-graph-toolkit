@@ -1,18 +1,18 @@
 ---
-name: run-graph
-description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.md file produced by the define-graph skill) under agent_works/graphs/{graph-name}/ — walks the graph's nodes in dependency order, dispatching each as a subagent call, handling map/subgraph nodes, branching, retries, and resumable run-state.
+name: agentgraph-run-graph
+description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.md file produced by the agentgraph-define-graph skill) under agent_works/graphs/{graph-name}/ — walks the graph's nodes in dependency order, dispatching each as a subagent call, handling map/subgraph nodes, branching, retries, and resumable run-state.
 ---
 
-# run-graph
+# agentgraph-run-graph
 
-Executes a graph previously authored by the `define-graph` skill. You (the main agent) are the
+Executes a graph previously authored by the `agentgraph-define-graph` skill. You (the main agent) are the
 runtime — there is no external execution engine. You read `graph.md`, dispatch each node as a
 subagent call via this session's subagent-dispatch tool (e.g. Claude Code's `Agent` tool, or a
 Cursor subagent), judge branch outcomes yourself, and persist progress after every node so a run
 can always be resumed accurately.
 
 For the exact `graph.md` schema, node types, and `runs/` folder layout, see
-`../define-graph/GRAPH-SPEC.md` — this skill does not restate that format, only how to execute it.
+`../agentgraph-define-graph/GRAPH-SPEC.md` — this skill does not restate that format, only how to execute it.
 
 ## Inputs
 
@@ -154,7 +154,7 @@ For each node in dependency order that is not yet completed in `run-state.json`:
    already does for an already-completed target: force a fresh `attempt-{N+1}/` and update its
    `run-state.json` status away from `bypassed` to `running`/`completed` for this new attempt. This
    matters whenever a single terminal node is a legitimate `next` target for more than one
-   upstream decision node in the same graph — `define-graph` should still make sure such a shared
+   upstream decision node in the same graph — `agentgraph-define-graph` should still make sure such a shared
    terminal's own prompt can tell which upstream path actually triggered it (e.g. by checking which
    of several possible prior outputs exist), since the two routes may carry different context.
 6. If the node run halted (unresolved branch, exhausted retries, or capability gap), stop the
@@ -249,7 +249,7 @@ When every node has been marked completed and no halt occurred, set `status: com
   folder** — i.e. its `run-state.json` and node folders live at
   `{current-run-folder}/{seq}_{node-id}/attempt-{N}/`, not under `agent_works/graphs/{ref}/runs/`.
   The referenced graph's own top-level `runs/` folder is only used when that graph is invoked
-  directly as a top-level `run-graph` call, not when reached via a subgraph node. Step 2 does
+  directly as a top-level `agentgraph-run-graph` call, not when reached via a subgraph node. Step 2 does
   **not** apply recursively as written (it scans `runs/*/run-state.json` to pick among multiple
   timestamped runs, which is a top-level-only concept) — at the nested level there is exactly one
   possible location, `{current-run-folder}/{seq}_{node-id}/attempt-{N}/run-state.json`; simply
@@ -264,7 +264,7 @@ When every node has been marked completed and no halt occurred, set `status: com
   leaf and map-item dispatches, every attempt including retries and loop-backs) — not only its
   entry points, since which specific node's prompt actually needs the context depends on the
   target graph's own structure. Treat it as invocation-supplied context available for the lifetime
-  of this nested run, the same as text "given directly as part of the run-graph request" would be
+  of this nested run, the same as text "given directly as part of the agentgraph-run-graph request" would be
   for a top-level invocation. Ordinary (non-map) subgraph dispatches have no `context.md` and
   nothing is appended.
 - The subgraph node is complete when its nested run reaches `status: completed`; it is a halt if
@@ -383,7 +383,7 @@ A run halts (stops without completing) for exactly three reasons, always recorde
   judgment — only by the user fixing the graph, granting the permission, or explicitly directing
   a specific path forward.
 
-On halt, report to the user which node halted and why. Re-invoking `run-graph` on this graph does
+On halt, report to the user which node halted and why. Re-invoking `agentgraph-run-graph` on this graph does
 **not** resume it automatically — a halted run stays halted until the user explicitly asks to
 redrive it (see step 2), which resets just the halted node and continues, or explicitly asks to
 start fresh, which abandons it in favor of a brand-new run.

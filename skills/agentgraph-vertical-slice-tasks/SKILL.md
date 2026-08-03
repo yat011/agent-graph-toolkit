@@ -1,5 +1,5 @@
 ---
-name: vertical-slice-tasks
+name: agentgraph-vertical-slice-tasks
 description: How to size and sequence tasks in a plan's task breakdown — vertical slices, prefactoring, blocking edges, the wide-refactor exception. Use when writing or reviewing a plan's Tasks section and its machine-readable task list.
 ---
 
