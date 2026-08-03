@@ -62,7 +62,7 @@ branches:
 ```
 
 Implement the requirements for this task. The requirements text is supplied by whoever invoked
-this graph run (appended below this prompt, or given directly as part of their run-graph
+this graph run (appended below this prompt, or given directly as part of their agentgraph-run-graph
 request) — if no requirements text is present anywhere in your instructions, stop and write to
 `output.md` that requirements are missing rather than guessing at what to build.
 
