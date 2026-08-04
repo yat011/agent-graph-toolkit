@@ -51,6 +51,15 @@ Item folders are **1-indexed** (`item-1`, `item-2`, ...), matching the 1-indexed
 prefixes — not a 0-indexed array position. Element `i` (0-based) of the source `items.json` array
 lives in `item-{i+1}/`.
 
+`run-state.json` tracks, per node: `status` (`pending` / `running` / `completed` / `halted` /
+`bypassed`), `attempt`, and (if the node declares `branches`) `branch_decision`. A `type: map`
+node's entry additionally carries an `items` map (`item-1`, `item-2`, ... → the same per-node
+shape, recursively). A `type: subgraph` node's entry additionally carries its nested run's own
+state under a `subgraph_state` key — **always a nested JSON object matching this same shape
+recursively, never a string** — plus `resolved_ref` when the node used `ref_from`, for
+auditability. `total_executions` and `halt_reason` are tracked once, at the top level of a run,
+shared across every nesting level rather than tracked separately per subgraph.
+
 Every graph lives flat under `agent_works/graphs/{graph-name}/` — there is no separate library
 folder, since any graph might later be reused as a sub-graph of another.
 
