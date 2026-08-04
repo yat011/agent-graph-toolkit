@@ -46,6 +46,30 @@ your-project/agents/planner.md                   <- from agents/planner.md
 
 Or keep one canonical copy shared across projects and link to it instead of copying.
 
+## Quick example
+
+`run-graph.js` is a stateful CLI: each call reads `run-state.json`, computes the next step, writes
+it back, and prints one JSON object. A minimal loop against the bundled `standard-task` template:
+
+```
+$ node skills/agentgraph-run-graph/run-graph.js resolve-run --graph standard-task
+{"schemaVersion":1,"status":"ready","mode":"new","run_path":"agent_works/graphs/standard-task/runs/standard-task_20260804T160620"}
+
+$ node skills/agentgraph-run-graph/run-graph.js next --run agent_works/graphs/standard-task/runs/standard-task_20260804T160620
+{"schemaVersion":1,"status":"dispatch","node_id":"01_check_environment","node_type":"leaf","attempt":1,
+ "output_path":"agent_works/graphs/standard-task/runs/standard-task_20260804T160620/01_check_environment/attempt-1/output.md",
+ "agent":"general-purpose","model":"haiku","prompt":"...","has_branches":true,"is_redrive":false,
+ "copied_templates":["standard-task"]}
+
+$ node skills/agentgraph-run-graph/run-graph.js status --run agent_works/graphs/standard-task/runs/standard-task_20260804T160620
+{"schemaVersion":1,"status":"running","total_executions":1,"halt_reason":null,
+ "nodes":{"01_check_environment":{"status":"running","attempt":1,"branch_decision":null}}}
+```
+
+The caller (a skill or agent) dispatches `prompt` to `agent` on `model`, writes the result to
+`output_path`, then reports back via `record-result` / `record-branch` and calls `next` again — see
+`skills/agentgraph-run-graph/CLI-CONTRACT.md` for every command and response shape.
+
 ## Format reference
 
 `skills/agentgraph-define-graph/GRAPH-SPEC.md` is the single source of truth for the `graph.md` file format:
