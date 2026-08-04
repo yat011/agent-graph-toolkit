@@ -46,29 +46,68 @@ your-project/agents/planner.md                   <- from agents/planner.md
 
 Or keep one canonical copy shared across projects and link to it instead of copying.
 
-## Quick example
+## End-to-end example
 
-`run-graph.js` is a stateful CLI: each call reads `run-state.json`, computes the next step, writes
-it back, and prints one JSON object. A minimal loop against the bundled `standard-task` template:
+Two separate skills, invoked one after the other in a Claude Code session.
+
+### 1. Define the graph
 
 ```
-$ node skills/agentgraph-run-graph/run-graph.js resolve-run --graph standard-task
-{"schemaVersion":1,"status":"ready","mode":"new","run_path":"agent_works/graphs/standard-task/runs/standard-task_20260804T160620"}
-
-$ node skills/agentgraph-run-graph/run-graph.js next --run agent_works/graphs/standard-task/runs/standard-task_20260804T160620
-{"schemaVersion":1,"status":"dispatch","node_id":"01_check_environment","node_type":"leaf","attempt":1,
- "output_path":"agent_works/graphs/standard-task/runs/standard-task_20260804T160620/01_check_environment/attempt-1/output.md",
- "agent":"general-purpose","model":"haiku","prompt":"...","has_branches":true,"is_redrive":false,
- "copied_templates":["standard-task"]}
-
-$ node skills/agentgraph-run-graph/run-graph.js status --run agent_works/graphs/standard-task/runs/standard-task_20260804T160620
-{"schemaVersion":1,"status":"running","total_executions":1,"halt_reason":null,
- "nodes":{"01_check_environment":{"status":"running","attempt":1,"branch_decision":null}}}
+> define a graph for agent_works/plans/example-plan.md
 ```
 
-The caller (a skill or agent) dispatches `prompt` to `agent` on `model`, writes the result to
-`output_path`, then reports back via `record-result` / `record-branch` and calls `next` again — see
-`skills/agentgraph-run-graph/CLI-CONTRACT.md` for every command and response shape.
+`agentgraph-define-graph` reads the plan, breaks it into nodes, and writes
+`agent_works/graphs/example-graph/graph.md` (a planner that fans out a task list, a `map` node that
+implements each task, and a review node that loops back on critical issues):
+
+```
+01_planner ──► 02_per_task_impl ──► 03_review
+                     ^                 │
+                     └──[critical issues]
+                                       ├──[passed]────► 05_success
+                                       └──[no match]──► 06_manual_flag
+```
+
+It shows you that diagram plus a plain-language summary of each node and asks you to confirm or
+request changes — it never runs anything itself. Once you confirm, `graph.md` is ready on disk.
+
+### 2. Run the graph
+
+```
+> run the example-graph graph
+```
+
+`agentgraph-run-graph` drives `run-graph.js` in a loop: resolve the run, dispatch each node to the
+agent/model the graph specifies, record the result, evaluate any branch, repeat.
+
+```
+$ node skills/agentgraph-run-graph/run-graph.js resolve-run --graph example-graph
+{"schemaVersion":1,"status":"ready","mode":"new","run_path":"agent_works/graphs/example-graph/runs/example-plan_20260804T160620"}
+
+$ node skills/agentgraph-run-graph/run-graph.js next --run agent_works/graphs/example-graph/runs/example-plan_20260804T160620
+{"schemaVersion":1,"status":"dispatch","node_id":"01_planner","node_type":"leaf","attempt":1,
+ "output_path":".../01_planner/attempt-1/output.md","agent":"general-purpose","prompt":"Break the plan into a list of independent tasks...",
+ "has_branches":false,"is_redrive":false}
+
+  # caller dispatches the prompt to an Agent, writes output.md + items.json, then:
+$ node skills/agentgraph-run-graph/run-graph.js record-result --run ...example-plan_20260804T160620 --node 01_planner --outcome success
+{"schemaVersion":1,"status":"ok","run_path":"...","node_status":"succeeded"}
+
+$ node skills/agentgraph-run-graph/run-graph.js next --run ...example-plan_20260804T160620
+{"schemaVersion":1,"status":"dispatch","node_id":"02_per_task_impl","node_type":"map","item":"item-1","attempt":1, ...}
+  # ...repeats per item, then 03_review, evaluated via record-branch, then 05_success...
+
+$ node skills/agentgraph-run-graph/run-graph.js status --run ...example-plan_20260804T160620
+{"schemaVersion":1,"status":"complete","total_executions":6,"halt_reason":null, "nodes":{...}}
+```
+
+If a node exhausts retries, hits an unresolved branch, or self-reports a capability gap, `next`
+returns `{"status":"halted", ...}` instead of `complete` — fix the cause and re-invoke
+`agentgraph-run-graph` (redrive) to resume from where it stopped, rather than starting over.
+
+See `skills/agentgraph-define-graph/GRAPH-SPEC.md` for this worked example in full (including the
+`runs/` folder contents at each step) and `skills/agentgraph-run-graph/CLI-CONTRACT.md` for every
+command and response shape.
 
 ## Format reference
 
