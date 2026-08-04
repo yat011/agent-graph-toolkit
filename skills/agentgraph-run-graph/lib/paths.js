@@ -1,6 +1,14 @@
 'use strict';
 const path = require('node:path');
 
+function graphDir(graphsRoot, graphName) {
+  return path.join(graphsRoot, graphName);
+}
+
+function templateDir(graphName) {
+  return path.join(__dirname, '..', 'templates', graphName);
+}
+
 function nodeDir(baseDir, nodeId) {
   return path.join(baseDir, nodeId);
 }
@@ -47,4 +55,6 @@ module.exports = {
   runStatePath,
   runsRoot,
   graphMdPath,
+  graphDir,
+  templateDir,
 };

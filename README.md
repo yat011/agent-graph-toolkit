@@ -19,25 +19,26 @@ skills/
   agentgraph-code-review-standards/    # two-axis (Standards vs Spec) review structure
   agentgraph-test-quality-bar/          # what makes a test worth keeping
   agentgraph-research-primary-sources/  # citation discipline for research subagents
+  agentgraph-run-graph/templates/feature-kickoff/   # branch -> plan -> review -> fan out tasks -> final regression check
+  agentgraph-run-graph/templates/standard-task/     # per-task subgraph: environment check -> implement -> review
 agents/
   planner.md               # spec + tech plan + task breakdown
   tech-plan-reviewer.md    # adversarial plan review, Approve/Reject
   researcher.md             # read-only research (external docs or codebase)
   code-writer.md            # implements a well-specified change
   reviewer.md               # read-only code review, two-axis
-examples/feature-pipeline/
-  graphs/feature-kickoff/   # branch -> plan -> review -> fan out tasks -> final regression check
-  graphs/standard-task/     # per-task subgraph: environment check -> implement -> review
 ```
 
 Skill folder names carry an `agentgraph-` prefix to avoid colliding with a consuming project's own
 skill names; rename them back if you don't need that.
 
 `skills/` and `agents/` are the generic engine — domain-agnostic, no assumptions about your stack.
-`examples/feature-pipeline/` is a worked example showing the mechanics in action (branches, retry,
-loop-back attempt limits, a cheap gating check pinned to a fast model, map-of-subgraphs) with
-placeholder "build/test environment" and "test suite" steps — swap those for whatever your actual
-project's tooling is.
+`skills/agentgraph-run-graph/templates/` ships two worked example graphs showing the mechanics in
+action (branches, retry, loop-back attempt limits, a cheap gating check pinned to a fast model,
+map-of-subgraphs) with placeholder "build/test environment" and "test suite" steps — swap those for
+whatever your actual project's tooling is. Consuming projects that reference `feature-kickoff` or
+`standard-task` by name without a local copy get one auto-copied in from these templates on first
+run (see `skills/agentgraph-run-graph/SKILL.md`).
 
 ## Using it with Claude Code
 

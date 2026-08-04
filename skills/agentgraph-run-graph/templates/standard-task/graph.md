@@ -111,6 +111,12 @@ guidelines: SOLID/DRY, no duplicate code, no defensive null checks, test coverag
 against the original requirements. Accept or reject. End `output.md` with a single-line
 `Result: accepted` or `Result: rejected — <short reason>` conclusion.
 
+If and only if the result is `accepted`, stage and commit exactly the files `git status` currently
+shows as modified/untracked in the working tree at that point (the current state, not a diff
+against any earlier attempt's output — a loop-back retry that re-edited the same files must never
+end up committing a stale rejected version alongside the current one), with commit message
+`<task-id>: <title>`.
+
 ## 04_success
 
 ```yaml

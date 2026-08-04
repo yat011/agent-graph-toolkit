@@ -18,8 +18,13 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
 
 ## Inputs
 
-- A graph name (required). The graph must already exist at
-  `agent_works/graphs/{graph-name}/graph.md`.
+- A graph name (required). If no local `graph.md` exists yet at
+  `agent_works/graphs/{graph-name}/graph.md` and the name matches one of this skill's own
+  `templates/{graph-name}/` (e.g. `feature-kickoff`, `standard-task`), it is auto-copied in on
+  first use — including for nested `subgraph`/`map` lookups reached mid-run, not just the
+  top-level graph — so no manual setup step is required for those. `next`'s response reports any
+  auto-copy via `copied_templates` (see `CLI-CONTRACT.md`). A graph name that matches neither an
+  existing local `graph.md` nor a template still fails with the usual "graph.md not found" error.
 - Optionally, "start fresh" / "new run" (pass `--fresh` to `resolve-run`).
 - Optionally, "redrive `{graph-name}`" to resume a *halted* run after fixing whatever caused it
   (pass `--redrive`). A halted run is never auto-resumed without this explicit ask.

@@ -64,21 +64,42 @@ function compareBySeq(a, b) {
 
 function loadGraph(graphsRoot, graphName) {
   const p = P.graphMdPath(graphsRoot, graphName);
+  let wasCopied = false;
+  if (!fs.existsSync(p)) {
+    const templateDir = P.templateDir(graphName);
+    if (fs.existsSync(templateDir)) {
+      fs.cpSync(templateDir, P.graphDir(graphsRoot, graphName), { recursive: true });
+      wasCopied = true;
+    }
+  }
   const nodes = parseGraph(p);
   const nodesMap = new Map(nodes.map((n) => [n.id, n]));
   const order = topoSort(nodes);
-  return { graphName, nodesMap, order };
+  return { graphName, nodesMap, order, wasCopied };
 }
 
 // ---------- unit construction ----------
 
-function makeUnit(graphsRoot, graphName, state, baseDir, contextMd) {
-  const { nodesMap, order } = loadGraph(graphsRoot, graphName);
+function makeUnit(graphsRoot, graphName, state, baseDir, contextMd, copiedTemplates) {
+  const { nodesMap, order, wasCopied } = loadGraph(graphsRoot, graphName);
   if (state.status === undefined) state.status = 'running';
   if (state.halt_reason === undefined) state.halt_reason = null;
   if (state.total_executions === undefined) state.total_executions = 0;
   if (!state.nodes) state.nodes = {};
-  return { graphsRoot, graphName, nodesMap, order, state, baseDir, contextMd: contextMd || null };
+  const sharedCopiedTemplates = copiedTemplates || [];
+  if (wasCopied && !sharedCopiedTemplates.includes(graphName)) {
+    sharedCopiedTemplates.push(graphName);
+  }
+  return {
+    graphsRoot,
+    graphName,
+    nodesMap,
+    order,
+    state,
+    baseDir,
+    contextMd: contextMd || null,
+    copiedTemplates: sharedCopiedTemplates,
+  };
 }
 
 function depsSatisfied(unit, node) {
@@ -270,7 +291,7 @@ function dispatchMap(unit, node, execRef, isForced) {
         continue;
       }
       if (!itemEntry.subgraph_state) itemEntry.subgraph_state = {};
-      const childUnit = makeUnit(unit.graphsRoot, refName, itemEntry.subgraph_state, realItemAttemptDir, substitutedBody);
+      const childUnit = makeUnit(unit.graphsRoot, refName, itemEntry.subgraph_state, realItemAttemptDir, substitutedBody, unit.copiedTemplates);
       const result = resolveUnit(childUnit, execRef);
       persistSubgraphMirror(itemEntry, childUnit);
       if (result.type === 'dispatch' || result.type === 'needs_branch') {
@@ -378,7 +399,7 @@ function dispatchSubgraph(unit, node, execRef, isForced) {
 
   const attemptDirPath = P.attemptDir(unit.baseDir, node.id, entry.attempt);
   const refName = entry.resolved_ref || node.ref;
-  const childUnit = makeUnit(unit.graphsRoot, refName, entry.subgraph_state || {}, attemptDirPath, unit.contextMd);
+  const childUnit = makeUnit(unit.graphsRoot, refName, entry.subgraph_state || {}, attemptDirPath, unit.contextMd, unit.copiedTemplates);
   const result = resolveUnit(childUnit, execRef);
   persistSubgraphMirror(entry, childUnit);
 
@@ -516,21 +537,22 @@ function next({ graphsRoot, runPath }) {
   const result = resolveUnit(unit, execRef);
   state.total_executions = execRef.value;
   writeState(statePath, state);
+  const copiedTemplates = unit.copiedTemplates.length > 0 ? { copied_templates: unit.copiedTemplates } : {};
 
   if (result.type === 'dispatch') {
-    return { status: 'dispatch', run_path: runPath, ...stripType(result) };
+    return { status: 'dispatch', run_path: runPath, ...stripType(result), ...copiedTemplates };
   }
   if (result.type === 'needs_branch') {
     // record-result already ran for this node (status: completed) but the follow-up
     // record-branch call never landed — most likely the process/session was interrupted
     // between the two. Nothing to (re)dispatch; the agent must re-read this node's output.md
     // and call record-branch before the run can proceed.
-    return { status: 'needs_branch', run_path: runPath, node_id: result.node_id };
+    return { status: 'needs_branch', run_path: runPath, node_id: result.node_id, ...copiedTemplates };
   }
   if (result.type === 'complete') {
-    return { status: 'complete', run_path: runPath };
+    return { status: 'complete', run_path: runPath, ...copiedTemplates };
   }
-  return { status: 'halted', run_path: runPath, halt_reason: result.reason };
+  return { status: 'halted', run_path: runPath, halt_reason: result.reason, ...copiedTemplates };
 }
 
 function stripType(obj) {

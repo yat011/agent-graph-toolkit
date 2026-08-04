@@ -21,16 +21,20 @@ Responses:
 ### `next --run <run_path> [--graphs-root <path>]`
 
 Recurses through nested map/subgraph structure internally. Returns a fully composed prompt
-(readiness-check text, redrive notice, invocation-context all pre-appended).
+(readiness-check text, redrive notice, invocation-context all pre-appended). If any graph
+referenced during this call's resolution (the top-level graph itself, or a nested one reached via
+a `subgraph`/`map` node) had no local `graph.md` and was auto-copied in from the skill's own
+`templates/{name}/`, every such graph name is listed in an added `copied_templates: string[]`
+field on the response; the field is omitted (or empty) when nothing was copied during that call.
 
 Responses:
-- `{status:"dispatch", run_path, node_id, node_type, item?, attempt, output_path, agent, model, prompt, has_branches, is_redrive}`
-- `{status:"needs_branch", run_path, node_id}` — this node already succeeded (`record-result` ran)
-  but no `record-branch` call was ever recorded for it, most likely because the process/session
-  was interrupted between the two calls. Nothing to dispatch: re-read that node's `output.md` and
-  call `record-branch` for it before calling `next` again.
-- `{status:"complete", run_path}`
-- `{status:"halted", run_path, halt_reason}`
+- `{status:"dispatch", run_path, node_id, node_type, item?, attempt, output_path, agent, model, prompt, has_branches, is_redrive, copied_templates?}`
+- `{status:"needs_branch", run_path, node_id, copied_templates?}` — this node already succeeded
+  (`record-result` ran) but no `record-branch` call was ever recorded for it, most likely because
+  the process/session was interrupted between the two calls. Nothing to dispatch: re-read that
+  node's `output.md` and call `record-branch` for it before calling `next` again.
+- `{status:"complete", run_path, copied_templates?}`
+- `{status:"halted", run_path, halt_reason, copied_templates?}`
 
 ### `record-result --run <run_path> --node <id> [--item <item-N>] --outcome success|technical_failure`
 
