@@ -44,8 +44,15 @@ changes state:
 - If the current branch is already `feature/{slug}`, a prior attempt already completed this step
   (e.g. this is a technical-failure retry after a crash post-checkout) — treat it as already done,
   do not run `git checkout -b` again.
-- Otherwise, if there are uncommitted changes, do not touch them or switch branches — write
-  `output.md` explaining the working tree is dirty and stop.
+- Otherwise, check for uncommitted changes **outside `agent_works/graphs/`** — e.g.
+  `git status --short -- . ':(exclude)agent_works/graphs/'`. Exclude that path because
+  `agentgraph-run-graph` itself writes this run's `run-state.json`/`output.md` files as the run
+  progresses, before this node's dispatch even happens — on a project where `agent_works/graphs/`
+  is git-tracked, that means this run's own bookkeeping is *always* freshly modified/untracked at
+  this point, which is expected and not a sign of uncommitted human work. If anything is
+  uncommitted outside that path, do not touch it or switch branches — write `output.md` explaining
+  the working tree is dirty (listing exactly which files, from the unfiltered `git status`) and
+  stop.
 - Otherwise, if a branch named `feature/{slug}` already exists (e.g. left over from a prior
   attempt) check it out with `git checkout feature/{slug}` (no `-b`). Only use
   `git checkout -b feature/{slug}` when that branch doesn't exist yet. Never force anything, never
