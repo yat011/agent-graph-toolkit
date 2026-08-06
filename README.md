@@ -14,6 +14,7 @@ skills/
   agentgraph-research-primary-sources/  # citation discipline for research subagents
   agentgraph-run-graph/templates/feature-kickoff/   # branch -> plan -> review -> fan out tasks -> final regression check
   agentgraph-run-graph/templates/standard-task/     # per-task subgraph: environment check -> implement -> review
+  agentgraph-run-graph/templates/idea-to-spec/      # draft spec -> adversarial review -> bounded retry loop
 agents/
   planner.md               # spec + tech plan + task breakdown
   tech-plan-reviewer.md    # adversarial plan review, Approve/Reject
@@ -26,11 +27,13 @@ Skill folder names carry an `agentgraph-` prefix to avoid colliding with a consu
 skill names; rename them back if you don't need that.
 
 `skills/` and `agents/` are the generic engine — domain-agnostic, no assumptions about your stack.
-`skills/agentgraph-run-graph/templates/` ships two worked example graphs showing the mechanics in
+`skills/agentgraph-run-graph/templates/` ships three worked example graphs showing the mechanics in
 action (branches, retry, loop-back attempt limits, a cheap gating check pinned to a fast model,
 map-of-subgraphs) with placeholder "build/test environment" and "test suite" steps — swap those for
-whatever your actual project's tooling is. Consuming projects that reference `feature-kickoff` or
-`standard-task` by name without a local copy get one auto-copied in from these templates on first
+whatever your actual project's tooling is. `idea-to-spec` is the simplest of the three: a two-node
+draft/review loop that turns a freeform idea into a spec under `agent_works/specs/`, no environment
+or test-suite steps involved. Consuming projects that reference `feature-kickoff`, `standard-task`,
+or `idea-to-spec` by name without a local copy get one auto-copied in from these templates on first
 run (see `skills/agentgraph-run-graph/SKILL.md`).
 
 ## Installation
