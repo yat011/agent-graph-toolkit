@@ -13,7 +13,7 @@ skills/
   agentgraph-test-quality-bar/          # what makes a test worth keeping
   agentgraph-research-primary-sources/  # citation discipline for research subagents
   agentgraph-run-graph/templates/feature-kickoff/   # branch -> plan -> review -> fan out tasks -> final regression check
-  agentgraph-run-graph/templates/standard-task/     # per-task subgraph: environment check -> implement -> review
+  agentgraph-run-graph/templates/standard-task/     # per-task subgraph: implement -> review, with a bounded retry loop
   agentgraph-run-graph/templates/idea-to-spec/      # draft spec -> adversarial review -> bounded retry loop
 agents/
   planner.md               # spec + tech plan + task breakdown

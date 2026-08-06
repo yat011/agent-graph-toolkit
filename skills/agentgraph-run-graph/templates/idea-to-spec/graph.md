@@ -34,7 +34,10 @@ directory for any earlier `attempt-N/output.md` (N < your current attempt). If o
   the reviewer's rejection findings.
 - Read the existing spec file at that path and **amend it in place** to address every finding the
   reviewer raised. Do not create a differently-named file, do not start over from scratch, and do
-  not discard sections the reviewer didn't flag as wrong.
+  not discard sections the reviewer didn't flag as wrong. (Sticky-research convention: treat facts
+  already established in the prior attempt as still valid unless the rejection specifically
+  contradicts them — do not repeat the fresh-draft exploration below from scratch; scope any new
+  exploration to exactly what the rejection's findings require re-verifying.)
 
 If no earlier attempt exists, this is a **fresh draft**:
 

@@ -77,10 +77,17 @@ latest `output.md`.
 If a previous attempt of `03_tech_plan_reviewer` already exists in this run
 (`../03_tech_plan_reviewer/attempt-*/output.md` relative to this node's run folder), read its
 latest rejection reasons in full and revise the plan and task list to explicitly address every one
-of them — do not just resubmit the same plan unchanged.
+of them — do not just resubmit the same plan unchanged. Also read this same node's own immediately
+preceding `attempt-{N-1}/output.md` (sticky-research convention) — treat the file paths, line
+numbers, and other facts you already established there as still valid unless the rejection
+specifically contradicts them, rather than re-running the full parallel research pass below from
+scratch. Scope fresh research to exactly what the rejection's findings require re-verifying.
 
 Follow your own standard process end to end (parallel research, spec, plan, tasks with at least 3
-test cases each and reasonable size, write the plan under `agent_works/plans/{feature-slug}.md`).
+test cases each and reasonable size, write the plan under `agent_works/plans/{feature-slug}.md`) —
+run this full pipeline only on a fresh (non-retry) attempt; a retry attempt instead revises the
+existing plan/tasks per the sticky-research scoping above, still writing the result to the same
+paths.
 Also write the same task list out as machine-readable JSON at
 `agent_works/plans/{feature-slug}.tasks.json` — a JSON array of objects with `id`, `title`,
 `description`, `test_cases` (array), and `dependencies` (array of other task ids) fields,
@@ -157,10 +164,6 @@ map_over: 04_load_tasks
 ref: standard-task
 retry: 0
 ```
-
-The build/test environment was already confirmed working for this batch by `04_load_tasks` —
-trust that and skip re-verification, unless there's independent reason to doubt it (e.g. a prior
-item in this batch reported an environment failure).
 
 Requirements: {{item.title}} — {{item.description}}
 

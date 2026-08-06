@@ -1,8 +1,4 @@
 ```
-01_check_environment
- ├─[environment working]──────► 02_implement_requirements
- └─[environment not working]──► 05_manual_flag
-
 02_implement_requirements
  ├─[implemented]──────────────► 03_review
  └─[stopped without completing]─► 05_manual_flag
@@ -17,39 +13,17 @@
 ```
 
 Per-task subgraph, invoked via `05_run_tasks`'s map-of-subgraphs in `feature-kickoff`. Illustrates:
-a cheap gating check pinned to a fast model, a skip-review-on-incomplete-implementation branch, and
-a bounded retry loop between implementation and review.
-
-## 01_check_environment
-
-```yaml
-deps: []
-type: leaf
-retry: 1
-agent: general-purpose
-model: haiku
-branches:
-  - condition: "the project's build/test environment is available and responding"
-    next: 02_implement_requirements
-  default: 05_manual_flag
-```
-
-If your invocation context (appended below this prompt, e.g. a map-of-subgraphs `context.md` from
-a batch runner like `feature-kickoff`'s `05_run_tasks` node) already states the build/test
-environment was confirmed for this batch, trust that — write `output.md` noting the batch-level
-confirmation and end with `Result: environment working`, without re-running the checks below,
-unless that same context also names a reason to doubt it (e.g. a prior item in this batch already
-reported a failure).
-
-Otherwise (no such context, e.g. this is a standalone/direct invocation), verify the environment
-yourself using whatever this project provides for that (a CLI command, an MCP tool, a CI status
-check). Report what you found. End `output.md` with a single-line `Result: environment working` or
-`Result: environment not working` conclusion.
+a skip-review-on-incomplete-implementation branch, and a bounded retry loop between implementation
+and review. (Node numbering starts at `02_` — this graph previously had a separate
+`01_check_environment` gating node; it was removed since the implementer already discovers and
+reports a broken environment itself via the test run it must perform before finishing, making a
+standalone check redundant. `04_load_tasks` in the parent `feature-kickoff` graph still does a
+single upfront environment check before any task in the batch starts.)
 
 ## 02_implement_requirements
 
 ```yaml
-deps: [01_check_environment]
+deps: []
 type: leaf
 retry: 1
 agent: code-writer
@@ -68,7 +42,12 @@ request) — if no requirements text is present anywhere in your instructions, s
 
 If this is a retry after a previously rejected review, first read the latest
 `03_review/attempt-*/output.md` in this run's folder (if it exists) for the specific issues
-raised, and address those in addition to the original requirements.
+raised, and address those in addition to the original requirements. Also read this same node's own
+immediately preceding `attempt-{N-1}/output.md` (sticky-research convention) — treat the file
+paths, line numbers, and other facts you already established there as still valid unless the
+rejection specifically contradicts them, rather than re-running a full research/exploration pass
+from scratch. Scope any fresh investigation to exactly what the rejection's findings require
+re-checking.
 
 Follow this project's own conventions (SOLID/DRY, no duplicate code, no defensive null checks, and
 whatever file/language scope restrictions it declares).
@@ -79,14 +58,18 @@ passes (not just the tests you added) — report the actual pass/fail counts fro
 `output.md`, never an unverified claim. Only stop short of green and say so explicitly if a failure
 genuinely requires a design decision beyond a mechanical fix (e.g. a production-code architecture
 change), and only after you've actually run the tests and root-caused it — never as a substitute
-for running them. If the project requires any manual follow-up step you can't perform yourself,
-save a checklist under `agent_works/manual_actions/`, if this project uses that convention.
-Summarize what you changed and why, plus the final test results, in `output.md`. There is nothing
-for `03_review` to productively evaluate when no complete, tested change exists — whatever the
-reason (missing capability, a genuine design ambiguity, or anything else), end `output.md` with a
-single-line `Result: implemented` only when you've reached that complete, tested state; otherwise
-end with `Result: stopped — <short reason>` so this routes straight to manual review instead of a
-pointless review pass.
+for running them. If the failure is because the build/test environment itself is unavailable or
+unresponsive (not a code defect), say so explicitly in `output.md` and end with
+`Result: stopped — <short reason>` rather than treating it as an implementation gap — the run's own
+history (or `03_review`, on a retry loop) will still surface this to a human via `05_manual_flag`.
+If the project requires any manual follow-up step you can't perform yourself, save a checklist
+under `agent_works/manual_actions/`, if this project uses that convention. Summarize what you
+changed and why, plus the final test results, in `output.md`. There is nothing for `03_review` to
+productively evaluate when no complete, tested change exists — whatever the reason (missing
+capability, a genuine design ambiguity, a broken environment, or anything else), end `output.md`
+with a single-line `Result: implemented` only when you've reached that complete, tested state;
+otherwise end with `Result: stopped — <short reason>` so this routes straight to manual review
+instead of a pointless review pass.
 
 ## 03_review
 
@@ -133,16 +116,16 @@ implemented and passed review, noting what changed.
 ## 05_manual_flag
 
 ```yaml
-deps: [01_check_environment]
+deps: [02_implement_requirements]
 type: leaf
 retry: 0
 agent: general-purpose
 ```
 
-This run needs manual attention. Read whichever of the following exist in this run's folder:
-`01_check_environment/attempt-*/output.md`, `02_implement_requirements/attempt-*/output.md`,
-`03_review/attempt-*/output.md`. Write `output.md` summarizing why the run couldn't complete
-automatically (build/test environment unreachable, implementation stopped without reaching a
-complete tested state, or the review kept rejecting after 3 implementation attempts) and what a
-human should check next. Also save this summary as a manual follow-up checklist under
-`agent_works/manual_actions/`, if this project uses that convention.
+This run needs manual attention. Reachable two ways: directly from `02_implement_requirements`
+(implementation stopped without completing — including a broken/unresponsive build-test
+environment discovered mid-implementation) or via `03_review`'s rejected-3-times branch. Read
+whichever of the following exist in this run's folder: `02_implement_requirements/attempt-*/
+output.md`, `03_review/attempt-*/output.md`. Write `output.md` summarizing why the run couldn't
+complete automatically and what a human should check next. Also save this summary as a manual
+follow-up checklist under `agent_works/manual_actions/`, if this project uses that convention.

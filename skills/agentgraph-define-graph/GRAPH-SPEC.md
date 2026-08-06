@@ -300,6 +300,21 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
   before acting (e.g. "if X already exists, treat as done") rather than assuming a clean slate —
   `agentgraph-run-graph` itself does not attempt any de-duplication.
 
+- **Sticky-research convention for loop-back retries.** This is distinct from the retry-idempotency
+  note above: that one covers a `retry`-driven re-run after *technical* failure; this one covers a
+  `branches`-driven loop-back after a *rejection* (e.g. `03_review`/`03_tech_plan_reviewer` routing
+  back to the node it reviewed). A rejection-driven retry is fixing specific flagged issues, not
+  starting a fresh investigation — its prompt should therefore instruct the subagent to read its
+  own prior attempt's `output.md` (the immediately preceding `attempt-{N-1}/output.md` under this
+  same node) first, and treat any file paths, line numbers, and other facts already established
+  there as still valid unless the rejection specifically contradicts them, rather than re-running a
+  full parallel research/exploration pass from scratch. Scope fresh investigation to exactly what
+  the rejection's findings require re-checking. This keeps loop-back retries cheap (in tokens and
+  wall time) in proportion to the size of the actual fix, instead of paying the full
+  first-attempt research cost on every iteration of a 3-attempt loop. `agentgraph-define-graph`
+  should phrase this explicitly wherever it authors a node that can be reached via a loop-back
+  `branches` condition — do not rely on the subagent inferring it.
+
 - **Checkpoint-every-node.** `agentgraph-run-graph` writes/updates `run-state.json` immediately after each
   node execution completes (success, failure, or halt) — not only at the end of a run — so
   resume is always accurate, including partially-completed map fan-outs and nested sub-graph
