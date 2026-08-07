@@ -315,6 +315,30 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
   should phrase this explicitly wherever it authors a node that can be reached via a loop-back
   `branches` condition — do not rely on the subagent inferring it.
 
+- **Evidence citation convention (commit-pinned facts).** Generalizes the sticky-research
+  convention above beyond same-node loop-back retries, to let a *different* node — even in a
+  different graph, even a run days later — reuse a fact another node already fact-checked against
+  the codebase, without re-reading the file itself. When a node's prompt has it fact-check a
+  codebase claim (verify a file path, class/method/field name, or cited value actually exists as
+  described), and that fact is meant to be durable (i.e. written into a persisted artifact a
+  downstream node/graph will read, such as a spec file — not just that node's own attempt-scoped
+  `output.md`), cite it as `path:line @ <commit-hash>`, where `<commit-hash>` is `git rev-parse
+  HEAD` at the moment the fact was verified. If the working tree has uncommitted changes to that
+  path at verification time, write `path:line @ uncommitted` instead.
+  A downstream node instructed to reuse cited facts should, for each citation, check: (0) if the
+  citation reads `@ uncommitted`, it never passes — skip straight to re-verifying, there is no hash
+  to check against; otherwise (1) the cited path currently has no uncommitted local changes, and
+  (2) `git diff <cited-hash> HEAD -- <path>` is empty (no commit has touched that path since) —
+  treat a `git diff` that errors outright (e.g. the hash no longer resolves in this repo's history,
+  because of a rebase/squash, or the citation came from a different repo/branch) the same as a
+  failed check, not as a hard stop. If both (1) and (2) hold, trust the fact as still true and skip
+  re-reading that file; if any check fails, treat the citation as stale and re-verify it fresh.
+  `agentgraph-define-graph` should phrase this explicitly on both ends — the producing
+  node's prompt (cite facts this way) and the consuming node's prompt (check-then-trust instead of
+  re-deriving) — wherever one node is meant to build on another's already-vetted research rather
+  than repeat it. This only licenses skipping re-reads of *cited facts*; a downstream reviewer
+  must still independently judge whether the reasoning/plan built on top of those facts is sound.
+
 - **Checkpoint-every-node.** `agentgraph-run-graph` writes/updates `run-state.json` immediately after each
   node execution completes (success, failure, or halt) — not only at the end of a run — so
   resume is always accurate, including partially-completed map fan-outs and nested sub-graph
