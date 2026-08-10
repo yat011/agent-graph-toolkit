@@ -84,7 +84,7 @@ function parseGraph(graphPath) {
   }
 
   const nodes = [];
-  const sectionRe = /^## (\S+)\s*$/gm;
+  const sectionRe = /^## (\d+_\S*)\s*$/gm;
   const matches = [];
   let m;
   while ((m = sectionRe.exec(raw)) !== null) {
