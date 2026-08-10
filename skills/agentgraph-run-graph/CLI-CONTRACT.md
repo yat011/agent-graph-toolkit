@@ -8,10 +8,18 @@ corrupt state, missing graph.md, misuse).
 
 ## Commands
 
-### `resolve-run --graph <name> [--redrive] [--fresh] [--graphs-root <path>]`
+### `resolve-run --graph <name> [--redrive] [--fresh] [--slug <text>] [--graphs-root <path>]`
 
 Finds or starts a run for `{graphs-root}/{graph}/graph.md` (default `graphs-root`:
 `agent_works/graphs` under cwd).
+
+`--slug` only affects a brand-new run (`mode: "new"`) — it's ignored on resume/redrive, since
+those reuse an existing run's already-established folder. When given, the new run folder is named
+`{slug}_{graph}_{timestamp}` instead of the bare `{graph}_{timestamp}`; `slug` is sanitized the
+same way `graph` is (non-alphanumeric runs collapsed to a single `-`, leading/trailing `-`
+trimmed). Pass a short identifier for what this run is actually about (e.g. the feature/idea slug
+the run's input concerns) so a `runs/` directory with several runs stays scannable — see
+GRAPH-SPEC.md's file layout section for the full naming convention.
 
 Responses:
 - `{status:"ready", mode:"new"|"resume"|"redrive", run_path}`
@@ -64,7 +72,10 @@ Response: `{status, total_executions, halt_reason, nodes}` — full run-state su
 
 Checked against what Tasks 3-10 actually implemented:
 
-- `resolve-run` — matches contract as written.
+- `resolve-run` — matches contract as written. `--slug` added later (see above) once run folders
+  were found to only ever encode the graph name, never what the run's input was actually about,
+  which GRAPH-SPEC.md's file layout had already documented (`{input-summary-slug}_{timestamp}`)
+  but the implementation never carried out.
 - `next` — matches contract as written. `item` field only present on map-item dispatches. Added a
   `needs_branch` status (not in the original draft) for the interrupted-between-record-result-and-
   record-branch case, so resume never silently skips a pending branch judgment.

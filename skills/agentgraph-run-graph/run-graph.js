@@ -21,6 +21,7 @@ const COMMANDS = {
       graph: { type: 'string' },
       redrive: { type: 'boolean', default: false },
       fresh: { type: 'boolean', default: false },
+      slug: { type: 'string' },
       'graphs-root': { type: 'string' },
     },
     required: ['graph'],
@@ -133,6 +134,7 @@ function cmdResolveRun(values) {
     graphName: values.graph,
     redrive: values.redrive,
     fresh: values.fresh,
+    slug: values.slug,
   });
 }
 

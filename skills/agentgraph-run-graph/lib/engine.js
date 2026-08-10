@@ -419,7 +419,7 @@ function dispatchSubgraph(unit, node, execRef, isForced) {
 
 // ---------- top-level operations ----------
 
-function resolveRun({ graphsRoot, graphName, redrive, fresh }) {
+function resolveRun({ graphsRoot, graphName, redrive, fresh, slug }) {
   const runsDir = P.runsRoot(graphsRoot, graphName);
   const runs = listRuns(runsDir);
 
@@ -441,9 +441,11 @@ function resolveRun({ graphsRoot, graphName, redrive, fresh }) {
     return { status: 'ready', mode: 'resume', run_path: latest.path };
   }
 
-  const slug = graphName.replace(/[^a-z0-9-]+/gi, '-');
+  const graphSlug = graphName.replace(/[^a-z0-9-]+/gi, '-');
+  const inputSlug = slug ? slug.replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '') : '';
   const ts = timestamp();
-  const runPath = path.join(runsDir, `${slug}_${ts}`);
+  const runFolderName = inputSlug ? `${inputSlug}_${graphSlug}_${ts}` : `${graphSlug}_${ts}`;
+  const runPath = path.join(runsDir, runFolderName);
   fs.mkdirSync(runPath, { recursive: true });
   const initial = { status: 'running', total_executions: 0, halt_reason: null, nodes: {} };
   writeState(P.runStatePath(runPath), initial);

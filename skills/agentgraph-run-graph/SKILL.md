@@ -31,7 +31,13 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
 
 ## Loop
 
-1. Call `node run-graph.js resolve-run --graph {graph-name} [--redrive] [--fresh]`.
+1. On a fresh run (not a resume/redrive), derive a short kebab-case slug for what this run's input
+   is actually about (e.g. the feature/idea slug, not the graph name — that's already implied by
+   `--graph`) and pass it as `--slug`, so the run folder stays identifiable when a `runs/`
+   directory accumulates several runs over time. Skip this on `--redrive` (irrelevant — an existing
+   run's folder is reused) and when the run has no natural single-subject slug (e.g. a
+   `multi-feature-pipeline`-style batch run with no one topic).
+   Call `node run-graph.js resolve-run --graph {graph-name} [--redrive] [--fresh] [--slug {slug}]`.
    - `{status:"blocked", reason:"halted_run_exists", ...}` — report the halt (node, reason) and
      stop; tell the user to ask for a redrive (once fixed) or an explicit fresh start.
    - `{status:"blocked", reason:"nothing_to_redrive"}` — report there's nothing halted for this

@@ -26,7 +26,9 @@ Node types: `leaf`, `map`, `subgraph`.
 agent_works/graphs/{graph-name}/
   graph.md                                   # graph definition (see schema below)
   runs/
-    {input-summary-slug}_{timestamp}/
+    {input-slug}_{graph-name}_{timestamp}/      # {input-slug}_ prefix omitted if the run was
+                                                 # started without a --slug (agentgraph-run-graph's
+                                                 # resolve-run --slug flag)
       run-state.json                         # top-level run bookkeeping
       {seq}_{node-id}/
         attempt-1/
