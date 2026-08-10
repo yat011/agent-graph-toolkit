@@ -80,3 +80,30 @@ A run halts for exactly three reasons, recorded as `halt_reason`:
 
 Re-invoking this skill on a halted graph does **not** resume it automatically — ask for a redrive
 (resets just the halted node and continues) or an explicit fresh start (abandons it for a new run).
+
+## Map items and cross-item dependencies
+
+Two gaps neither `halted` nor `record-*` covers, both hit in practice running `feature-kickoff`'s
+`05_run_tasks` map:
+
+- **A map item can reach a "needs help" terminal that isn't a halt** — e.g. a nested
+  `standard-task` run's `02_implement_requirements` genuinely can't complete (a real design
+  decision is needed) and routes to `05_manual_flag`. That's a normal, recorded terminal, not a
+  `halted` run — `next()` keeps moving the top-level run forward to later items regardless. If you
+  resolve the underlying blocker out-of-band (dispatch a follow-up fix yourself, get it reviewed
+  and committed, outside `record-result`/`record-branch`), there is **no CLI primitive to redrive
+  just that one already-terminal map item** back onto `04_success` — the item's own tracked
+  `run-state.json` entry keeps showing the original terminal permanently. Don't fight this: get the
+  actual work done, verified, and committed, then write that resolution explicitly into the run's
+  own manual-actions note (or wherever this project tracks such things) so a later "final review"
+  step (or a human) doesn't mistake the stale terminal for still-open work.
+- **The map does not read or enforce a task list's own declared `dependencies` field.** If
+  `04_load_tasks`'s `items.json` came from a task breakdown where task N's own metadata says it
+  depends on task M, `next()` still dispatches item N right after item M regardless of whether
+  M's nested run actually reached success — it has no concept of that field at all, it just walks
+  items in order. If a later item genuinely can't produce a sensible result without an earlier
+  item's actual deliverable (not just its dispatch), checking that is on you: before dispatching a
+  map item whose task declares a dependency, confirm the depended-on item's nested run reached its
+  real success terminal, not just that its own dispatch happened. If it didn't, pause and resolve
+  that first rather than letting the engine mechanically walk into a task built on a broken
+  foundation.
