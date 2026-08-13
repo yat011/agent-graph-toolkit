@@ -82,21 +82,3 @@ Response: `{status:"ok", run_path}`. Exits 1 if the run is already halted.
 ### `status --run <run_path>`
 
 Response: `{status, total_executions, halt_reason, nodes}` — full run-state summary.
-
-## Implementation Audit
-
-Checked against what Tasks 3-10 actually implemented:
-
-- `resolve-run` — matches contract as written. `--slug` added later (see above) once run folders
-  were found to only ever encode the graph name, never what the run's input was actually about,
-  which GRAPH-SPEC.md's file layout had already documented (`{input-summary-slug}_{timestamp}`)
-  but the implementation never carried out.
-- `next` — matches contract as written. `item` field only present on map-item dispatches. Added a
-  `needs_branch` status (not in the original draft) for the interrupted-between-record-result-and-
-  record-branch case, so resume never silently skips a pending branch judgment.
-- `record-result` — matches contract as written.
-- `record-branch` — matches contract as written.
-- `record-halt` — matches contract as written; `--reason` currently only accepts `capability_gap`
-  since that's the only agent-initiated halt path (the other two reasons are always recorded by
-  the engine itself via `record-result`/`record-branch`).
-- `status` — matches contract as written.
