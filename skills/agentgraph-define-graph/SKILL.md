@@ -17,8 +17,7 @@ Before doing anything else, read `GRAPH-SPEC.md` in this same skill directory
 (`.claude/skills/agentgraph-define-graph/GRAPH-SPEC.md`) in full. It is the single source of truth for the
 file layout and the `graph.md` schema (node types, `deps`, `retry`, `agent`, `ref`, `map_over`,
 `receipt`, `branches`, the ASCII diagram block, the worked example). Do not re-derive or duplicate that format from
-memory — follow it exactly as written there. Required tools are listed in
-`../agentgraph-run-graph/DEPENDENCIES.md`.
+memory — follow it exactly as written there.
 
 ## Steps
 

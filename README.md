@@ -49,6 +49,11 @@ your-project/agents/planner.md                   <- from agents/planner.md
 
 Or keep one canonical copy shared across projects and link to it instead of copying.
 
+Runtime: Node.js (`node skills/agentgraph-run-graph/run-graph.js --help`) and a host that can
+dispatch a subagent. `feature-kickoff` and `standard-task` also need
+[codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp); those templates stop if
+the index is missing (`Result: CBM missing`). The engine does not check CBM itself.
+
 ## End-to-end example
 
 Two separate skills, invoked one after the other in a Claude Code session.

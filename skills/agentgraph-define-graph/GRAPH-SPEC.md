@@ -393,7 +393,7 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
   `CBM: missing` into `agent_works/INDEX.md` and must **not** proceed to implement if missing,
   empty, or the project is not indexed — route to `08_needs_manual_review` / `05_manual_flag`.
   After a node writes source, `detect_changes` (or a re-read) is required before trusting the
-  index for those files. See `../agentgraph-run-graph/DEPENDENCIES.md`.
+  index for those files.
 
 ## Other layout rules
 
