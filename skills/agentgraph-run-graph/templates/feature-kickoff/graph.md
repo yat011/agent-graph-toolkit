@@ -1,14 +1,15 @@
 ```
 01_create_feature_branch ──► 02_planner ──► 03_tech_plan_reviewer
-                                             ├─[Approve]──────────────────────────► 04_load_tasks
-                                             ├─[Reject, attempted 3 times]────────► 07_blocked_plan_rejected
-                                             └─[Reject, attempted < 3 times]──────► 02_planner  (loop back)
+                          │                  ├─[Approve]──────────────────────────► 04_load_tasks
+                          │                  ├─[Reject, attempted 3 times]────────► 07_blocked_plan_rejected
+                          │                  └─[Reject, attempted < 3 times]──────► 02_planner  (loop back)
+                          └─[CBM missing]──► 08_needs_manual_review
 
 04_load_tasks
- ├─[loaded, environment working]─► 05_run_tasks (map: standard-task per task) ──► 06_final_review
+ ├─[loaded, env + CBM working]─► 05_run_tasks (map: standard-task per task) ──► 06_final_review
  │                                                                                  ├─[passed]────────► 09_success
  │                                                                                  └─[issues found]──► 08_needs_manual_review
- └─[environment not working]─────────────────────────────────────────────────────────────────────────► 08_needs_manual_review
+ └─[env down or CBM missing]─────────────────────────────────────────────────────────────────────────► 08_needs_manual_review
 
 07_blocked_plan_rejected   (terminal — needs human)
 08_needs_manual_review      (terminal — needs human)
@@ -30,6 +31,7 @@ deps: []
 type: leaf
 retry: 1
 agent: general-purpose
+model: haiku
 ```
 
 Read the feature spec for this run: if the invoker of this graph specified a path, use it;
@@ -68,6 +70,10 @@ deps: [01_create_feature_branch]
 type: leaf
 retry: 1
 agent: planner
+branches:
+  - condition: "the planner's Result line is CBM missing"
+    next: 08_needs_manual_review
+  default: 03_tech_plan_reviewer
 ```
 
 Produce a spec + tech plan + task breakdown, plus the same task breakdown as a machine-readable
@@ -88,13 +94,27 @@ test cases each and reasonable size, write the plan under `agent_works/plans/{fe
 run this full pipeline only on a fresh (non-retry) attempt; a retry attempt instead revises the
 existing plan/tasks per the sticky-research scoping above, still writing the result to the same
 paths.
+
+**Code index (CBM):** Read `agent_works/INDEX.md` first. CBM is the structural *code*
+graph. Process rules are `CLAUDE.md` / `AGENTS.md` and the current spec/plan — do not
+create `agent_works/memory/`. CBM is **required**. If INDEX says `CBM: missing` or the
+tools do not exist, ping `list_projects` / `index_status`; if still down, stop — write
+`output.md` that CBM is required and end with `Result: CBM missing`. Do not plan from a
+repo-wide grep.
+If INDEX says `CBM: connected` (or your ping succeeds), send structural questions to CBM
+first (`search_graph` / `trace_path` / `detect_changes`). After you write source files,
+do not trust a pre-write index for those files — `detect_changes` or re-read them.
+Never grep `Library/`, `PackageCache/`, `Temp/`, `ThirdParty/` unless the task names that path.
+
 Also write the same task list out as machine-readable JSON at
 `agent_works/plans/{feature-slug}.tasks.json` — a JSON array of objects with `id`, `title`,
-`description`, `test_cases` (array), and `dependencies` (array of other task ids) fields,
-mirroring the plan's Tasks section exactly. This stable, non-attempt-scoped path (alongside the
-plan file itself) is what `04_load_tasks` reads directly — it must stay in sync with the plan's
-Tasks section on every revision, including loop-back retries. End `output.md` with the plan file
-path and the tasks JSON file path, each on their own line.
+`description` (≤ 800 characters), `test_cases` (array), `dependencies` (array of other task ids),
+and optional `kind` (`implement`|`verify`|`mechanical`), `test_scope`, `full_suite` (boolean,
+default false; at most one true per batch) fields, mirroring the plan's Tasks section exactly.
+Write/refresh `agent_works/INDEX.md` (paths and skill names only). This stable, non-attempt-scoped
+path (alongside the plan file itself) is what `04_load_tasks` reads directly — it must stay in
+sync with the plan's Tasks section on every revision, including loop-back retries. End `output.md`
+with the plan file path and the tasks JSON file path, each on their own line.
 
 ## 03_tech_plan_reviewer
 
@@ -131,8 +151,10 @@ retry: 1
 agent: general-purpose
 model: haiku
 branches:
-  - condition: "task list loaded and the project's build/test environment is available and responding"
+  - condition: "task list loaded, environment working, and CBM connected"
     next: 05_run_tasks
+  - condition: "CBM is missing, empty, or the project is not indexed"
+    next: 08_needs_manual_review
   - condition: "the project's build/test environment is not available/responding"
     next: 08_needs_manual_review
   default: 08_needs_manual_review
@@ -145,11 +167,17 @@ context (below) tells each `standard-task` invocation to trust this result inste
 re-checking. If the environment is not working, do not attempt to load the task list — end
 `output.md` with `Result: environment not working` and stop.
 
-Otherwise, read `02_planner`'s latest `output.md` for the tasks JSON file path — by construction
+If the environment is working, CBM is **required**. Call `list_projects` and/or `index_status`.
+Write `CBM: connected` or `CBM: missing` plus one line of evidence into `agent_works/INDEX.md`
+(create or update the CBM section). If CBM is missing, empty, or this project is not indexed,
+do not load the task list — end `output.md` with `Result: CBM missing` and stop.
+
+Then read `02_planner`'s latest `output.md` for the tasks JSON file path — by construction
 this is the attempt `03_tech_plan_reviewer` approved (a rejection produces a new `02_planner`
 attempt rather than reaching this node, so the latest attempt is always the approved one) — and
 read that JSON file. Each task is expected to have at least: `id`, `title`, `description`,
-`test_cases` (array), and `dependencies` (array of other task ids, may be empty).
+`test_cases` (array), and `dependencies` (array of other task ids, may be empty). Optional:
+`kind`, `test_scope`, `full_suite`. Copy those through unchanged.
 
 Write the task list to `items.json` in this node's attempt folder as a JSON array (copy it
 verbatim from the file found above). End `output.md` with a one-line summary of how many tasks
@@ -168,6 +196,11 @@ retry: 0
 Requirements: {{item.title}} — {{item.description}}
 
 Test cases to cover (at minimum): {{item.test_cases}}
+
+kind: {{item.kind}}
+test_scope: {{item.test_scope}}
+full_suite: {{item.full_suite}}
+dependencies: {{item.dependencies}}
 
 ## 06_final_review
 
@@ -192,9 +225,10 @@ Quick final check — confirm nothing was skipped, then run the full test suite.
    `standard-task` run reached the `04_success` terminal node. Flag, by task id/title, any task
    with no matching item folder (skipped entirely) or whose nested run ended anywhere other than
    `04_success` (e.g. `05_manual_flag`, or incomplete).
-2. Run the project's full automated test suite (however this project's tooling exposes that), with
-   no filtering, so every test in the project runs — not just tests touched by these tasks. Report
-   the pass/fail/skip counts and the names of any failing tests.
+2. Unfiltered suite (once). If a `full_suite: true` / `kind: verify` item already recorded
+   green counts in this run and `git status` shows no product/test changes since that run,
+   reuse those counts — do not run the suite again. Otherwise run the project's full
+   automated test suite with no filtering. Report pass/fail/skip counts and failing names.
 
 End `output.md` with: a per-task checklist (task id/title → completed / skipped / failed), the
 test run summary, and a single-line `Result: passed` or
@@ -231,8 +265,9 @@ task ran — no `06_final_review` output exists yet), or via `06_final_review`'s
 branch. Check which applies: if `06_final_review/attempt-*/output.md` exists in this run's folder,
 read it (and, if useful, the per-item outputs under `05_run_tasks`) and write `output.md`
 summarizing why this batch run needs manual attention (skipped/failed tasks, and/or failing
-tests). Otherwise, read `04_load_tasks`'s latest `output.md` and write `output.md` summarizing
-that the build/test environment wasn't reachable before any task could run. Either way, also save
+tests). Otherwise, read `04_load_tasks`'s latest `output.md` (or `02_planner` if this came from a
+CBM-missing planner stop) and write `output.md` summarizing that the environment or CBM
+wasn't reachable before any task could run. Either way, also save
 this summary as a manual follow-up checklist under `agent_works/manual_actions/`, if this project
 uses that convention.
 
@@ -243,6 +278,7 @@ deps: [06_final_review]
 type: leaf
 retry: 0
 agent: general-purpose
+model: haiku
 ```
 
 Read `06_final_review`'s latest `output.md`. Write a short final summary to `output.md`

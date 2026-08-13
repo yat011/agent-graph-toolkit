@@ -75,6 +75,12 @@ function stripQuotes(s) {
   return s;
 }
 
+// Parser stores unknown yaml scalars as strings; accept boolean true as well in case a
+// later real yaml parser is swapped in.
+function isReceiptTrue(value) {
+  return value === true || (typeof value === 'string' && value.toLowerCase() === 'true');
+}
+
 function parseGraph(graphPath) {
   let raw;
   try {
@@ -106,12 +112,19 @@ function parseGraph(graphPath) {
     }
     const meta = parseYamlBlock(yamlMatch[1]);
     const promptBody = sectionBody.slice(yamlMatch.index + yamlMatch[0].length).replace(/^\r?\n/, '').trimEnd();
+    const type = meta.type || 'leaf';
+    const receipt = isReceiptTrue(meta.receipt);
+    if (receipt && type !== 'leaf') {
+      throw new GraphParseError(
+        `Node section '${id}' declares receipt: true, which is only valid on type: leaf (got type: ${type})`
+      );
+    }
 
     nodes.push({
       id,
       seq: seqOf(id),
       deps: meta.deps || [],
-      type: meta.type || 'leaf',
+      type,
       retry: meta.retry !== undefined ? parseInt(meta.retry, 10) : 0,
       agent: meta.agent || 'general-purpose',
       model: meta.model || null,
@@ -119,6 +132,7 @@ function parseGraph(graphPath) {
       ref_from: meta.ref_from || null,
       map_over: meta.map_over || null,
       branches: meta.branches,
+      receipt,
       body: promptBody,
     });
   }

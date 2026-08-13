@@ -14,9 +14,11 @@ running is out of scope here even if the user seems eager to proceed; hand off t
 skill (or ask them to invoke it) once they confirm.
 
 Before doing anything else, read `GRAPH-SPEC.md` in this same skill directory
-(`.claude/skills/agentgraph-define-graph/GRAPH-SPEC.md`) in full. It is the single source of truth for the
+(`.claude/skills/agentgraph-define-graph/GRAPH-SPEC.md`) in full. Token/index/memory
+conventions and the portable tool list live in
+`../agentgraph-run-graph/TOKEN-SPEED.md` and `../agentgraph-run-graph/DEPENDENCIES.md`. It is the single source of truth for the
 file layout and the `graph.md` schema (node types, `deps`, `retry`, `agent`, `ref`, `map_over`,
-`branches`, the ASCII diagram block, the worked example). Do not re-derive or duplicate that format from
+`receipt`, `branches`, the ASCII diagram block, the worked example). Do not re-derive or duplicate that format from
 memory — follow it exactly as written there.
 
 ## Steps
@@ -51,7 +53,9 @@ cover the work end to end. For each unit of work, decide:
   so `deps` only ever point backward.
 - **Node type** (per GRAPH-SPEC.md's node model):
   - `leaf` — a single subagent call producing one `output.md`. Use this for any discrete, one-shot
-    piece of work (implement a thing, review a thing, write a doc).
+    piece of work (implement a thing, review a thing, write a doc). A leaf may set `receipt: true`
+    (engine synthesizes `output.md` and marks the node completed inside `next()` — no dispatch).
+    See GRAPH-SPEC.md's `receipt` field.
   - `map` — use when the plan describes doing the *same kind* of work over a list of items whose
     count/identity isn't known until an earlier node produces them (e.g. "implement each task
     from the plan", "review each file in the list"). The map node must `map_over` a node that

@@ -11,12 +11,14 @@ Cursor subagent). There is no external framework or execution engine.
 
 ## Node model
 
-One primitive: a leaf node = one subagent call + prompt, output written to `output.md`. There
-is no human-checkpoint node type — runs are fully autonomous, no interrupts. A node can instead
-be a reference to another graph (`ref: {graph-name}`), recursing arbitrarily deep ("a node is
-just a sub-graph"). When the target graph's name isn't known until runtime (e.g. it's produced by
-an earlier node in this same graph), use `ref_from: {node-id}` instead of `ref` — see "Dynamic
-subgraph convention" below.
+One primitive: a leaf node = one subagent call + prompt, output written to `output.md`. A leaf
+may set `receipt: true` to mark it as a bookkeeping terminal (e.g. `04_success`): the engine
+synthesizes its `output.md` and marks it completed inside `next()`, and never dispatches a
+subagent for it. There is no human-checkpoint node type — runs are fully autonomous, no
+interrupts. A node can instead be a reference to another graph (`ref: {graph-name}`), recursing
+arbitrarily deep ("a node is just a sub-graph"). When the target graph's name isn't known until
+runtime (e.g. it's produced by an earlier node in this same graph), use `ref_from: {node-id}`
+instead of `ref` — see "Dynamic subgraph convention" below.
 
 Node types: `leaf`, `map`, `subgraph`.
 
@@ -80,6 +82,7 @@ model: haiku                    # optional — overrides the agent type's own de
 ref: schema-design              # for type: subgraph — a graph name fixed at authoring time
 ref_from: 02_planner_step        # alternative to ref — node id whose output.md's `Graph:` line names the graph at runtime
 map_over: 01_planner             # required if type: map — node id whose items.json to iterate
+receipt: true                    # optional — leaf only; engine synthesizes output.md, never dispatched
 branches:                        # optional — controller-judged, evaluated in order
   - condition: "review found critical issues"
     next: 04_retry_with_context
@@ -103,6 +106,7 @@ convention below, in which case this text is never dispatched as a prompt to any
 | `ref` | one of `ref`/`ref_from` required if `type: subgraph`; also usable on `type: map` | — | Name of another graph under `agent_works/graphs/` to recurse into, fixed when this graph.md was authored. On a `type: map` node (in place of `agent`), marks the per-item template as a nested subgraph invocation rather than a leaf agent call — see "Map-of-subgraphs invocation context" below. |
 | `ref_from` | one of `ref`/`ref_from` required if `type: subgraph`; also usable on `type: map` | — | Node id (in this same graph) whose latest `output.md` supplies the target graph name at runtime via a `Graph:` line. Use when the target isn't known until execution (e.g. a planning node that authors a fresh graph per run). Usable on `type: map` the same way as `ref`. |
 | `map_over` | required if `type: map` | — | Node id whose `items.json` to iterate over. |
+| `receipt` | no | `false` | If `true`, this leaf is a receipt: `next` synthesizes `attempt-N/output.md`, marks the node `completed`, and continues resolving in the same call — it never returns `dispatch` for the node. Only valid on `type: leaf` (a parse error on `map`/`subgraph`). Synthesized receipts do not increment `total_executions` (that counter counts dispatches). |
 | `branches` | no | — | List of `{condition, next}` entries, evaluated in declaration order, plus an optional `default`. |
 
 A fenced ASCII diagram block at the top of the file renders the same graph (nodes + edges, branch
@@ -259,8 +263,8 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
 
 - **Result-line convention for branching.** Every node whose section in `graph.md` declares
   `branches` must have its prompt instruct the subagent to end `output.md` with a single-line
-  `Result: <short phrase>` conclusion. The controller still judges the branch from the full
-  output, but the convention reduces ambiguous/hedging matches. Whichever branch is taken (or
+  `Result: <short phrase>` conclusion. The controller matches the `Result:` line first and
+  opens the rest of `output.md` only if that line is missing or ambiguous. Whichever branch is taken (or
   `default`, or none) is logged in `run-state.json` for that node with the matched condition
   text, so misroutes are auditable after the fact.
 
@@ -345,6 +349,52 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
   node execution completes (success, failure, or halt) — not only at the end of a run — so
   resume is always accurate, including partially-completed map fan-outs and nested sub-graph
   runs.
+
+- **`items.json` optional router fields.** In addition to `id`, `title`, `description`,
+  `test_cases`, and `dependencies`, a task object may include `kind` (`implement` default |
+  `verify` | `mechanical`), `test_scope` (project-specific test filter), and `full_suite`
+  (boolean, default false). `description` stays ≤ 800 characters; longer rationale belongs in
+  the plan file. At most one item in a batch should set `full_suite: true`.
+
+- **Scoped tests; one unfiltered suite.** An implementer runs only `test_scope` (or the tests
+  for the files it owns). It must not require an unfiltered project suite before writing
+  `Result: implemented`. The batch's unfiltered suite runs once, at the graph's final-review
+  node — or on a single `full_suite: true` / `kind: verify` item, not both. If that item already
+  recorded green counts and the worktree has not changed, final-review reuses those counts.
+
+- **Index only.** `agent_works/INDEX.md` is the routing document (paths and skill *names*,
+  not file bodies). Do not create `agent_works/memory/` — those files go stale because the
+  graph does not maintain them. Process rules live in `CLAUDE.md` / `AGENTS.md` and the
+  current spec/plan. Commit-pinned citations belong **in the spec/plan**, per the
+  evidence-citation convention. After a `05_manual_flag` (or equivalent), write the blocker
+  to that node's `output.md` and `agent_works/manual_actions/`.
+
+- **Map `dependencies` are enforced by `dispatchMap`.** An item whose `dependencies` (array of
+  other item **ids**, matching `itemsSource[].id`) is nonempty does not start until every listed
+  id's map item has `status === 'completed'` **and** reached a success terminal — for a nested
+  `standard-task` (or other subgraph), `04_success` completed, not `05_manual_flag`; for a leaf
+  map, the item itself completed. If the next array-order item is not ready, `next()` skips to
+  the next ready item. In-progress items are returned first; a blocked item is never dispatched.
+  When every remaining item is permanently blocked (dep ended at `05_manual_flag`, missing id,
+  finished without success), those items stay pending and the map completes so a later
+  `06_final_review` can flag the missing `04_success`. If nothing is ready or in-progress and
+  some items still wait on unfinished deps (e.g. a cycle), the run halts with
+  `halt_reason: unmet_dependencies`. Independent ready items may still be fanned out in
+  parallel by the host.
+
+- **Dispatch `model` explicitly.** Bookkeeping / mechanical nodes set `model:` to the cheapest
+  available host model. An omitted `model` inherits the (usually expensive) session default.
+
+- **Branch from `Result:` first.** The controller matches the `Result:` line before opening the
+  rest of `output.md`. Do not paste prior items' `output.md` into the next dispatch — hand a path.
+
+- **Required structural index (CBM).** `codebase-memory-mcp` (`search_graph`, `detect_changes`,
+  `index_status`, `list_projects`) is required for `feature-kickoff` / `standard-task`.
+  `04_load_tasks` (and the planner, if it cannot ping CBM) must write `CBM: connected` or
+  `CBM: missing` into `agent_works/INDEX.md` and must **not** proceed to implement if missing,
+  empty, or the project is not indexed — route to `08_needs_manual_review` / `05_manual_flag`.
+  After a node writes source, `detect_changes` (or a re-read) is required before trusting the
+  index for those files. See `../agentgraph-run-graph/DEPENDENCIES.md`.
 
 ## Other layout rules
 

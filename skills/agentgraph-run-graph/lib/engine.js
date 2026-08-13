@@ -202,6 +202,7 @@ function dispatchNode(unit, node, execRef, isForced) {
 }
 
 function dispatchLeaf(unit, node, execRef, isForced) {
+  if (node.receipt) return synthesizeReceipt(unit, node, isForced);
   const entry = getEntry(unit, node.id);
   if (entry.status === 'running') {
     const attemptDirPath = P.attemptDir(unit.baseDir, node.id, entry.attempt);
@@ -214,6 +215,47 @@ function dispatchLeaf(unit, node, execRef, isForced) {
   execRef.value += 1;
   const attemptDirPath = P.attemptDir(unit.baseDir, node.id, entry.attempt);
   return buildLeafDispatch(unit, node, entry, attemptDirPath);
+}
+
+// Receipt leaves are bookkeeping terminals (e.g. standard-task 04_success). The engine
+// writes a short output.md and marks the node completed here so next() never returns
+// dispatch for them. Does not increment execRef — total_executions counts dispatches.
+function synthesizeReceipt(unit, node, isForced) {
+  const entry = getEntry(unit, node.id);
+  if (entry.status === 'completed' || entry.status === 'bypassed') {
+    if (isForced) unit.state.forced_next = null;
+    return null;
+  }
+  if (entry.status !== 'running') {
+    entry.attempt += 1;
+  }
+  if (isForced) unit.state.forced_next = null;
+  const attemptDirPath = P.attemptDir(unit.baseDir, node.id, entry.attempt);
+  fs.mkdirSync(attemptDirPath, { recursive: true });
+  const trigger = findReceiptTrigger(unit, node);
+  const lines = [
+    `# ${node.id}`,
+    '',
+    'synthesized: true',
+    `node: ${node.id}`,
+    `triggered_by: ${trigger || '(none)'}`,
+    '',
+  ];
+  fs.writeFileSync(P.outputPath(attemptDirPath), lines.join('\n'), 'utf8');
+  entry.status = 'completed';
+  entry.branch_decision = null;
+  return null;
+}
+
+function findReceiptTrigger(unit, node) {
+  for (const [id, e] of Object.entries(unit.state.nodes)) {
+    if (e.branch_decision && e.branch_decision.next === node.id) return id;
+  }
+  for (let i = node.deps.length - 1; i >= 0; i--) {
+    const e = unit.state.nodes[node.deps[i]];
+    if (e && e.status === 'completed') return node.deps[i];
+  }
+  return node.deps[0] || null;
 }
 
 function buildLeafDispatch(unit, node, entry, attemptDirPath) {
@@ -238,6 +280,54 @@ function buildLeafDispatch(unit, node, entry, attemptDirPath) {
   };
 }
 
+function itemKeyForSourceId(items, id) {
+  const idx = items.findIndex((it) => it && typeof it === 'object' && it.id === id);
+  if (idx === -1) return null;
+  return `item-${idx + 1}`;
+}
+
+// Leaf map: item completed is the success terminal.
+// Subgraph map: nested 04_success completed (not 05_manual_flag). If the nested
+// graph has no 04_success node, treat completed-without-05_manual_flag as success.
+function mapItemReachedSuccess(itemEntry, isMapOfSubgraphs) {
+  if (!itemEntry || itemEntry.status !== 'completed') return false;
+  if (!isMapOfSubgraphs) return true;
+  const nodes = (itemEntry.subgraph_state && itemEntry.subgraph_state.nodes) || {};
+  if (nodes['04_success']) return nodes['04_success'].status === 'completed';
+  if (nodes['05_manual_flag'] && nodes['05_manual_flag'].status === 'completed') return false;
+  return true;
+}
+
+// ready: empty/missing deps, or every listed itemsSource[].id succeeded.
+// waiting: a listed dep exists and has not finished yet (pending/running).
+// blocked: a listed dep is missing, halted, or finished without a success terminal.
+function mapItemDepState(items, entry, item, isMapOfSubgraphs) {
+  const deps = item && typeof item === 'object' && Array.isArray(item.dependencies)
+    ? item.dependencies
+    : [];
+  if (deps.length === 0) return 'ready';
+  let waiting = false;
+  for (const depId of deps) {
+    const depKey = itemKeyForSourceId(items, depId);
+    if (!depKey) return 'blocked';
+    const depEntry = entry.items[depKey];
+    if (!depEntry || depEntry.status === 'pending') {
+      waiting = true;
+      continue;
+    }
+    if (depEntry.status === 'running') {
+      waiting = true;
+      continue;
+    }
+    if (depEntry.status === 'completed') {
+      if (!mapItemReachedSuccess(depEntry, isMapOfSubgraphs)) return 'blocked';
+      continue;
+    }
+    return 'blocked';
+  }
+  return waiting ? 'waiting' : 'ready';
+}
+
 function dispatchMap(unit, node, execRef, isForced) {
   const entry = getEntry(unit, node.id);
   if (entry.status !== 'running') {
@@ -257,6 +347,14 @@ function dispatchMap(unit, node, execRef, isForced) {
   const items = entry.itemsSource || [];
   const mapAttemptDir = P.attemptDir(unit.baseDir, node.id, entry.attempt);
   const isMapOfSubgraphs = !!(node.ref || node.ref_from);
+  let waitingOnUnfinished = false;
+  let rescan = true;
+
+  // Rescan after an item completes in this call so an earlier waiter whose
+  // dep just reached 04_success becomes ready instead of looking like a cycle.
+  while (rescan) {
+    rescan = false;
+    waitingOnUnfinished = false;
 
   for (let i = 0; i < items.length; i++) {
     const itemKey = `item-${i + 1}`;
@@ -264,8 +362,20 @@ function dispatchMap(unit, node, execRef, isForced) {
     const itemEntry = entry.items[itemKey];
     if (itemEntry.status === 'completed') continue;
 
-    const itemDirPath = P.itemDir(mapAttemptDir, i + 1);
     const item = items[i];
+    const inProgress = itemEntry.status === 'running' || itemEntry.status === 'halted';
+    if (!inProgress) {
+      const depState = mapItemDepState(items, entry, item || {}, isMapOfSubgraphs);
+      if (depState === 'waiting') {
+        waitingOnUnfinished = true;
+        continue;
+      }
+      if (depState === 'blocked') {
+        continue;
+      }
+    }
+
+    const itemDirPath = P.itemDir(mapAttemptDir, i + 1);
     const substitutedBody = substituteTemplate(node.body, item);
 
     if (isMapOfSubgraphs) {
@@ -299,7 +409,8 @@ function dispatchMap(unit, node, execRef, isForced) {
       }
       if (result.type === 'complete') {
         itemEntry.status = 'completed';
-        continue;
+        rescan = true;
+        break;
       }
       if (result.type === 'halted') {
         entry.status = 'halted';
@@ -322,6 +433,18 @@ function dispatchMap(unit, node, execRef, isForced) {
       const dispatch = buildLeafDispatch(unit, itemNode, itemEntry, realDir);
       return { ...dispatch, node_id: node.id, item: itemKey };
     }
+  }
+  }
+
+  // Remaining items were skipped, not dispatched. Permanently blocked deps
+  // (failed / missing / 05_manual_flag) leave those items pending so a later
+  // final-review node can see the missing 04_success. If some items still wait
+  // on unfinished deps and nothing is in progress (cycle / all-waiting), halt.
+  if (waitingOnUnfinished) {
+    entry.status = 'halted';
+    unit.state.status = 'halted';
+    unit.state.halt_reason = 'unmet_dependencies';
+    return { type: 'halted', reason: 'unmet_dependencies' };
   }
 
   entry.status = 'completed';

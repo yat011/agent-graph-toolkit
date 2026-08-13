@@ -32,12 +32,15 @@ test('resolve-run + next against real templates auto-copies feature-kickoff, the
   writeOutput(d, 'branch created');
   engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
 
-  // 02_planner
+  // 02_planner (branches: CBM missing vs default → reviewer)
   d = engine.next({ graphsRoot, runPath });
   assert.equal(d.node_id, '02_planner');
   assert.ok(!d.copied_templates || d.copied_templates.length === 0);
-  writeOutput(d, 'plan produced');
+  writeOutput(d, 'plan produced\nResult: plan written');
   engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.status, 'needs_branch');
+  engine.recordBranch({ graphsRoot, runPath, nodeId: '02_planner', useDefault: true });
 
   // 03_tech_plan_reviewer -> Approve
   d = engine.next({ graphsRoot, runPath });
@@ -59,13 +62,13 @@ test('resolve-run + next against real templates auto-copies feature-kickoff, the
     graphsRoot,
     runPath,
     nodeId: d.node_id,
-    match: 'task list loaded and the project\'s build/test environment is available and responding',
+    match: 'task list loaded, environment working, and CBM connected',
   });
 
   // 05_run_tasks (map, ref: standard-task) — this is the nested lookup that must trigger a
   // second auto-copy, for standard-task, with no GraphParseError raised in between.
   d = engine.next({ graphsRoot, runPath });
-  assert.equal(d.node_id, '01_check_environment');
+  assert.equal(d.node_id, '02_implement_requirements');
   assert.ok(fs.existsSync(path.join(graphsRoot, 'standard-task', 'graph.md')));
   assert.deepEqual(d.copied_templates, ['standard-task']);
 

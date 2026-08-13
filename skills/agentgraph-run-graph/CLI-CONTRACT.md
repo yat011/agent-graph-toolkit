@@ -35,6 +35,21 @@ a `subgraph`/`map` node) had no local `graph.md` and was auto-copied in from the
 `templates/{name}/`, every such graph name is listed in an added `copied_templates: string[]`
 field on the response; the field is omitted (or empty) when nothing was copied during that call.
 
+`next` never returns `dispatch` for a node with `receipt: true`. The engine synthesizes that
+node's `attempt-N/output.md`, marks it `completed` (same `run-state.json` shape as a real leaf),
+and continues resolving in the same call until it has a real dispatch, or the run is
+`complete`/`halted`. Synthesized receipts do not increment `total_executions` — that counter
+counts dispatches.
+
+Map items honor `itemsSource[].dependencies` (other item **ids**). An item does not start until
+every listed id's map item is `completed` and reached a success terminal (`04_success` completed
+for a nested subgraph; the item itself for a leaf map). `next` skips a not-ready array-order
+item and dispatches the next ready one. In-progress items are returned first. Permanently
+blocked remaining items (dep hit `05_manual_flag`, missing id, finished without success) stay
+pending and the map completes — so a later final-review node can see the missing `04_success`.
+If nothing is ready or in-progress and some items still wait on unfinished deps (cycle),
+`next` returns `{status:"halted", halt_reason:"unmet_dependencies"}`.
+
 Responses:
 - `{status:"dispatch", run_path, node_id, node_type, item?, attempt, output_path, agent, model, prompt, has_branches, is_redrive, copied_templates?}`
 - `{status:"needs_branch", run_path, node_id, copied_templates?}` — this node already succeeded

@@ -55,21 +55,26 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
      actually do what `prompt` needs. This capability-gap judgment is yours alone, never the
      script's: if there's a gap, do not substitute, narrow scope, or retry around it — call
      `node run-graph.js record-halt --run {run_path} --node {node_id} --reason capability_gap
-     --detail "<what's missing>"`, report it to the user, and stop. Otherwise, make exactly one
-     `Agent`-tool call with the given `agent`/`model`/`prompt`, and wait for it to finish.
+     --detail "<what's missing>"`, report it to the user, and stop. If `dispatch.model` is
+     null/omitted and the prompt, invocation context, or the matching `itemsSource` item has
+     `kind: mechanical`, pass the cheapest model (`haiku`, or whatever this host already uses
+     for bookkeeping) as the subagent `model`, overriding the null. Do not invent an engine
+     field for this. Then make exactly one `Agent`-tool call with the given
+     `agent`/`model`/`prompt`, and wait for it to finish.
    - Read `output.md` at `output_path`.
      - If the subagent crashed or `output.md` wasn't written, call `record-result --outcome
        technical_failure` (add `--item {item}` if the dispatch had one).
      - Otherwise call `record-result --outcome success` (`--item` likewise).
-     - If `has_branches` was true, additionally judge — in plain language, from the full
-       `output.md` — which `branches` condition (if any) matches, and call `record-branch --node
-       {node_id} --match "<condition text>"`, or `--default`, or `--none` if nothing matches and
-       there's no default. This branch-condition judgment is also yours alone; the script only
-       applies the resulting transition.
+     - If `has_branches` was true, match the `Result:` line first (do not open the rest of
+       `output.md` unless that line is missing or ambiguous). Judge which `branches` condition
+       (if any) matches, and call `record-branch --node {node_id} --match "<condition text>"`,
+       or `--default`, or `--none` if nothing matches and there's no default. This
+       branch-condition judgment is also yours alone; the script only applies the resulting
+       transition. Keep `record-branch` as today.
 
 ## Halting
 
-A run halts for exactly three reasons, recorded as `halt_reason`:
+A run halts for exactly four reasons, recorded as `halt_reason`:
 
 - `unresolved_branch` — a completed node's `branches` had no matching condition and no `default`.
 - `retries_exhausted` — a node (or map item) failed technically more times than its `retry` allows.
@@ -77,14 +82,17 @@ A run halts for exactly three reasons, recorded as `halt_reason`:
   blocked/rejected by a permission prompt. Never resolved by retrying, substituting, or narrowing
   scope on your own judgment — only by the user fixing the graph, granting the permission, or
   explicitly directing a specific path forward.
+- `unmet_dependencies` — a map had remaining items still waiting on unfinished `dependencies`
+  (typically a cycle) and nothing was in progress to unblock them. Permanently blocked items
+  (dep hit `05_manual_flag`, missing id) do **not** halt — the map completes so final review
+  can flag the missing `04_success`.
 
 Re-invoking this skill on a halted graph does **not** resume it automatically — ask for a redrive
 (resets just the halted node and continues) or an explicit fresh start (abandons it for a new run).
 
 ## Map items and cross-item dependencies
 
-Two gaps neither `halted` nor `record-*` covers, both hit in practice running `feature-kickoff`'s
-`05_run_tasks` map:
+Two notes from running `feature-kickoff`'s `05_run_tasks` map:
 
 - **A map item can reach a "needs help" terminal that isn't a halt** — e.g. a nested
   `standard-task` run's `02_implement_requirements` genuinely can't complete (a real design
@@ -97,13 +105,21 @@ Two gaps neither `halted` nor `record-*` covers, both hit in practice running `f
   actual work done, verified, and committed, then write that resolution explicitly into the run's
   own manual-actions note (or wherever this project tracks such things) so a later "final review"
   step (or a human) doesn't mistake the stale terminal for still-open work.
-- **The map does not read or enforce a task list's own declared `dependencies` field.** If
-  `04_load_tasks`'s `items.json` came from a task breakdown where task N's own metadata says it
-  depends on task M, `next()` still dispatches item N right after item M regardless of whether
-  M's nested run actually reached success — it has no concept of that field at all, it just walks
-  items in order. If a later item genuinely can't produce a sensible result without an earlier
-  item's actual deliverable (not just its dispatch), checking that is on you: before dispatching a
-  map item whose task declares a dependency, confirm the depended-on item's nested run reached its
-  real success terminal, not just that its own dispatch happened. If it didn't, pause and resolve
-  that first rather than letting the engine mechanically walk into a task built on a broken
-  foundation.
+- **The engine honors `itemsSource[].dependencies`.** `dispatchMap` will not start an item until
+  every listed id's corresponding map item is `completed` **and** reached a success terminal
+  (`04_success` for a nested `standard-task`; the item itself for a leaf map). If the next
+  array-order item is blocked, `next()` skips to the next *ready* item. In-progress items are
+  returned first — it never dispatches a blocked item. When every remaining item is permanently
+  blocked (dep hit `05_manual_flag`, missing id, finished without `04_success`), those items
+  stay pending and the map completes so `06_final_review` can flag the missing `04_success`.
+  A cycle (nothing ready or in-progress, some still waiting on unfinished deps) returns
+  `halted` / `unmet_dependencies`. Independent ready items may still be dispatched in parallel
+  via the host's parallel subagent API if you choose to fan out beyond one `next()` at a time.
+  After a nested `05_manual_flag`, blockers live in that node's `output.md` and
+  `agent_works/manual_actions/`. Do **not** create `agent_works/memory/` or `open-questions.md`.
+
+Token/context contract (GRAPH-SPEC + `DEPENDENCIES.md`): implementers run **scoped** tests;
+the unfiltered suite is the final-review node (or one `full_suite: true` item, not both).
+Judge branches from the `Result:` line first. Do not paste prior `output.md` bodies into the
+next prompt — pass a path. `codebase-memory` is **required**; if its MCP tools are missing,
+the planner / `04_load_tasks` / implementer stop the graph.

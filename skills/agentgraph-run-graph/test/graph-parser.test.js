@@ -55,3 +55,78 @@ Some body text.
 test('throws a clear error for a missing graph.md', () => {
   assert.throws(() => parseGraph('/nonexistent/path/graph.md'), GraphParseError);
 });
+
+test('receipt: true (bare or quoted) on a leaf is stored as boolean true; omitted is false', () => {
+  const dir = mkTmpDir();
+  const p = path.join(dir, 'graph.md');
+  fs.writeFileSync(p, `
+## 01_plain
+\`\`\`yaml
+deps: []
+type: leaf
+\`\`\`
+Plain.
+
+## 02_receipt
+\`\`\`yaml
+deps: [01_plain]
+type: leaf
+receipt: true
+\`\`\`
+Receipt body.
+
+## 03_quoted
+\`\`\`yaml
+deps: [02_receipt]
+type: leaf
+receipt: "true"
+\`\`\`
+Quoted.
+`);
+  const nodes = parseGraph(p);
+  assert.equal(nodes[0].receipt, false);
+  assert.equal(nodes[1].receipt, true);
+  assert.equal(nodes[2].receipt, true);
+});
+
+test('receipt: true on a type: map node is a parse error', () => {
+  const dir = mkTmpDir();
+  const p = path.join(dir, 'graph.md');
+  fs.writeFileSync(p, `
+## 01_mapped
+\`\`\`yaml
+deps: []
+type: map
+map_over: 01_mapped
+receipt: true
+\`\`\`
+Body.
+`);
+  assert.throws(() => parseGraph(p), (err) => {
+    assert.equal(err.name, 'GraphParseError');
+    assert.match(err.message, /receipt/i);
+    assert.match(err.message, /leaf/i);
+    assert.match(err.message, /01_mapped/);
+    return true;
+  });
+});
+
+test('receipt: true on a type: subgraph node is a parse error', () => {
+  const dir = mkTmpDir();
+  const p = path.join(dir, 'graph.md');
+  fs.writeFileSync(p, `
+## 01_sub
+\`\`\`yaml
+deps: []
+type: subgraph
+ref: other
+receipt: true
+\`\`\`
+`);
+  assert.throws(() => parseGraph(p), (err) => {
+    assert.equal(err.name, 'GraphParseError');
+    assert.match(err.message, /receipt/i);
+    assert.match(err.message, /subgraph/);
+    return true;
+  });
+});

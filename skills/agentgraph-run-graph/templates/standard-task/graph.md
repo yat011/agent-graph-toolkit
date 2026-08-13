@@ -1,14 +1,15 @@
 ```
 02_implement_requirements
- ├─[implemented]──────────────► 03_review
- └─[stopped without completing]─► 05_manual_flag
+ ├─[implemented]──────────────────────────► 03_review
+ ├─[verified / full_suite no product files]► 04_success
+ └─[stopped without completing]───────────► 05_manual_flag
 
 03_review
  ├─[passed]───────────────────► 04_success
  ├─[rejected, attempts < 3]───► 02_implement_requirements   (loop back)
  └─[rejected, attempts = 3]───► 05_manual_flag
 
-04_success        (terminal — success)
+04_success        (terminal — success, receipt)
 05_manual_flag     (terminal — needs human)
 ```
 
@@ -28,7 +29,9 @@ type: leaf
 retry: 1
 agent: code-writer
 branches:
-  - condition: "implementation reached a complete, tested state — real changes made (or genuinely not needed), full test suite green"
+  - condition: "implementation verified (kind: verify, or full_suite with no product files changed) — complete, tested, skip review"
+    next: 04_success
+  - condition: "implementation reached a complete, tested state — real changes made (or genuinely not needed), scoped tests green"
     next: 03_review
   - condition: "implementation stopped without completing — missing capability/tool binding, a design decision needed, blocked by external state, or any other reason no complete tested change exists"
     next: 05_manual_flag
@@ -52,13 +55,24 @@ re-checking.
 Follow this project's own conventions (SOLID/DRY, no duplicate code, no defensive null checks, and
 whatever file/language scope restrictions it declares).
 
-You must build/compile and run the test suite yourself before finishing — do not hand off untested
-code for `03_review` to discover failures in. Do not write `output.md` until the full test suite
-passes (not just the tests you added) — report the actual pass/fail counts from your own run in
-`output.md`, never an unverified claim. Only stop short of green and say so explicitly if a failure
+You must build/compile and run **this task's scoped tests** before finishing — do not hand off
+untested code for `03_review` to discover failures in. Scope: `test_scope` from the invocation
+context if present; otherwise only the tests for the files this task owns. Do **not** run the
+unfiltered project suite unless the item sets `full_suite: true` or `kind: verify`. Report the
+actual pass/fail counts from your own scoped run in `output.md`, never an unverified claim.
+If `kind` is `verify`, change no product files unless a failure has a mechanical fix inside this
+task's file list. Read `agent_works/INDEX.md` first (paths only). CBM is **required**. If INDEX says
+`CBM: missing` or the tools do not exist, stop — end `output.md` with
+`Result: stopped — CBM missing` (routes to `05_manual_flag`). Do not implement from a
+repo-wide grep. If INDEX says `CBM: connected`, send structural questions to CBM first
+(`search_graph` / `trace_path` / `detect_changes`). After you write source, do not trust a
+pre-write index for those files — `detect_changes` or re-read them. Never grep
+`Library/`, `PackageCache/`, `Temp/`, `ThirdParty/` unless the task names that path.
+Do not create `agent_works/memory/`.
+Only stop short of green and say so explicitly if a failure
 genuinely requires a design decision beyond a mechanical fix (e.g. a production-code architecture
-change), and only after you've actually run the tests and root-caused it — never as a substitute
-for running them. If the failure is because the build/test environment itself is unavailable or
+change), and only after you've actually run the scoped tests and root-caused it — never as a
+substitute for running them. If the failure is because the build/test environment itself is unavailable or
 unresponsive (not a code defect), say so explicitly in `output.md` and end with
 `Result: stopped — <short reason>` rather than treating it as an implementation gap — the run's own
 history (or `03_review`, on a retry loop) will still surface this to a human via `05_manual_flag`.
@@ -67,9 +81,12 @@ under `agent_works/manual_actions/`, if this project uses that convention. Summa
 changed and why, plus the final test results, in `output.md`. There is nothing for `03_review` to
 productively evaluate when no complete, tested change exists — whatever the reason (missing
 capability, a genuine design ambiguity, a broken environment, or anything else), end `output.md`
-with a single-line `Result: implemented` only when you've reached that complete, tested state;
-otherwise end with `Result: stopped — <short reason>` so this routes straight to manual review
-instead of a pointless review pass.
+with a single-line `Result: verified` when the invocation context has `kind: verify`, or
+`full_suite: true` and you changed no product files — that skips `03_review` and routes to
+the `04_success` receipt. End with `Result: implemented` when `kind` is `implement` / default
+(or `full_suite: true` and you did change product files) so this goes to `03_review`.
+Otherwise end with `Result: stopped — <short reason>` so this routes straight to manual
+review instead of a pointless review pass.
 
 ## 03_review
 
@@ -106,12 +123,12 @@ end up committing a stale rejected version alongside the current one), with comm
 deps: [03_review]
 type: leaf
 retry: 0
-agent: general-purpose
+receipt: true
 ```
 
-Read the latest `02_implement_requirements/attempt-*/output.md` and `03_review/attempt-*/output.md`
-in this run's folder. Write a short final summary to `output.md` confirming the requirements were
-implemented and passed review, noting what changed.
+Synthesized receipt: requirements were implemented and passed review, or `kind: verify` /
+`full_suite` skipped review. The engine writes `output.md` when this node is reached — no
+subagent is dispatched. `receipt: true`.
 
 ## 05_manual_flag
 
@@ -129,3 +146,4 @@ whichever of the following exist in this run's folder: `02_implement_requirement
 output.md`, `03_review/attempt-*/output.md`. Write `output.md` summarizing why the run couldn't
 complete automatically and what a human should check next. Also save this summary as a manual
 follow-up checklist under `agent_works/manual_actions/`, if this project uses that convention.
+Do not create `agent_works/memory/` or `open-questions.md`.
