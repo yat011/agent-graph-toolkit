@@ -92,19 +92,11 @@ Re-invoking this skill on a halted graph does **not** resume it automatically �
 
 ## Map items and cross-item dependencies
 
-Two notes from running `feature-kickoff`'s `05_run_tasks` map:
-
 - **A map item can reach a "needs help" terminal that isn't a halt** — e.g. a nested
-  `standard-task` run's `02_implement_requirements` genuinely can't complete (a real design
-  decision is needed) and routes to `05_manual_flag`. That's a normal, recorded terminal, not a
-  `halted` run — `next()` keeps moving the top-level run forward to later items regardless. If you
-  resolve the underlying blocker out-of-band (dispatch a follow-up fix yourself, get it reviewed
-  and committed, outside `record-result`/`record-branch`), there is **no CLI primitive to redrive
-  just that one already-terminal map item** back onto `04_success` — the item's own tracked
-  `run-state.json` entry keeps showing the original terminal permanently. Don't fight this: get the
-  actual work done, verified, and committed, then write that resolution explicitly into the run's
-  own manual-actions note (or wherever this project tracks such things) so a later "final review"
-  step (or a human) doesn't mistake the stale terminal for still-open work.
+  `standard-task` run's `02_implement_requirements` routes to `05_manual_flag`. That is a
+  recorded terminal, not a `halted` run — `next()` keeps moving later items forward. There is
+  no CLI primitive to redrive one already-terminal map item back onto `04_success`. Record the
+  resolution in `agent_works/manual_actions/` (or the project's equivalent).
 - **The engine honors `itemsSource[].dependencies`.** `dispatchMap` will not start an item until
   every listed id's corresponding map item is `completed` **and** reached a success terminal
   (`04_success` for a nested `standard-task`; the item itself for a leaf map). If the next
@@ -118,8 +110,7 @@ Two notes from running `feature-kickoff`'s `05_run_tasks` map:
   After a nested `05_manual_flag`, blockers live in that node's `output.md` and
   `agent_works/manual_actions/`. Do **not** create `agent_works/memory/` or `open-questions.md`.
 
-Token/context contract (GRAPH-SPEC + `DEPENDENCIES.md`): implementers run **scoped** tests;
-the unfiltered suite is the final-review node (or one `full_suite: true` item, not both).
-Judge branches from the `Result:` line first. Do not paste prior `output.md` bodies into the
-next prompt — pass a path. `codebase-memory` is **required**; if its MCP tools are missing,
-the planner / `04_load_tasks` / implementer stop the graph.
+Implementers run **scoped** tests; the unfiltered suite is the final-review node (or one
+`full_suite: true` item, not both). Judge branches from the `Result:` line first. Do not paste
+prior `output.md` bodies into the next prompt — pass a path. `codebase-memory` is **required**;
+if its MCP tools are missing, the planner / `04_load_tasks` / implementer stop the graph.

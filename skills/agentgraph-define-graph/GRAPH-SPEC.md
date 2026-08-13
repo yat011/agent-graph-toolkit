@@ -363,11 +363,10 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
   recorded green counts and the worktree has not changed, final-review reuses those counts.
 
 - **Index only.** `agent_works/INDEX.md` is the routing document (paths and skill *names*,
-  not file bodies). Do not create `agent_works/memory/` — those files go stale because the
-  graph does not maintain them. Process rules live in `CLAUDE.md` / `AGENTS.md` and the
-  current spec/plan. Commit-pinned citations belong **in the spec/plan**, per the
-  evidence-citation convention. After a `05_manual_flag` (or equivalent), write the blocker
-  to that node's `output.md` and `agent_works/manual_actions/`.
+  not file bodies). Do not create `agent_works/memory/`. Process rules live in `CLAUDE.md` /
+  `AGENTS.md` and the current spec/plan. Commit-pinned citations belong **in the spec/plan**,
+  per the evidence-citation convention. After a `05_manual_flag` (or equivalent), write the
+  blocker to that node's `output.md` and `agent_works/manual_actions/`.
 
 - **Map `dependencies` are enforced by `dispatchMap`.** An item whose `dependencies` (array of
   other item **ids**, matching `itemsSource[].id`) is nonempty does not start until every listed
