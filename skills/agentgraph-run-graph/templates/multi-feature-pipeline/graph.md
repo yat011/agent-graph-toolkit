@@ -74,7 +74,7 @@ deps: []
 type: leaf
 retry: 1
 agent: general-purpose
-model: haiku
+model: haiku  # fallback: this host's low-cost model
 ```
 
 This run's invocation should include a free-text, ordered list of idea names (e.g. `"cat-toys,
@@ -182,7 +182,7 @@ deps: [02_run_idea_to_spec]
 type: leaf
 retry: 0
 agent: general-purpose
-model: haiku
+model: haiku  # fallback: this host's low-cost model
 branches:
   - condition: "the nested idea-to-spec run for item-1 reached its 03_success terminal (spec approved)"
     next: 04_commit_spec
@@ -246,7 +246,7 @@ deps: [05_run_feature_kickoff]
 type: leaf
 retry: 0
 agent: general-purpose
-model: haiku
+model: haiku  # fallback: this host's low-cost model
 branches:
   - condition: "the nested feature-kickoff run for item-1 reached its 09_success terminal"
     next: 07_skill_revision

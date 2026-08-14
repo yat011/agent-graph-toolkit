@@ -31,7 +31,7 @@ deps: []
 type: leaf
 retry: 1
 agent: general-purpose
-model: haiku
+model: haiku  # fallback: this host's low-cost model
 ```
 
 Read the feature spec for this run: if the invoker of this graph specified a path, use it;
@@ -149,7 +149,7 @@ deps: [03_tech_plan_reviewer]
 type: leaf
 retry: 1
 agent: general-purpose
-model: haiku
+model: haiku  # fallback: this host's low-cost model
 branches:
   - condition: "task list loaded, environment working, and CBM connected"
     next: 05_run_tasks
@@ -278,7 +278,7 @@ deps: [06_final_review]
 type: leaf
 retry: 0
 agent: general-purpose
-model: haiku
+model: haiku  # fallback: this host's low-cost model
 ```
 
 Read `06_final_review`'s latest `output.md`. Write a short final summary to `output.md`

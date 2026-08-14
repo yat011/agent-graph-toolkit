@@ -56,11 +56,11 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
      script's: if there's a gap, do not substitute, narrow scope, or retry around it — call
      `node run-graph.js record-halt --run {run_path} --node {node_id} --reason capability_gap
      --detail "<what's missing>"`, report it to the user, and stop. If `dispatch.model` is
-     null/omitted and the prompt, invocation context, or the matching `itemsSource` item has
-     `kind: mechanical`, pass the cheapest model (`haiku`, or whatever this host already uses
-     for bookkeeping) as the subagent `model`, overriding the null. Do not invent an engine
-     field for this. Then make exactly one `Agent`-tool call with the given
-     `agent`/`model`/`prompt`, and wait for it to finish.
+     `haiku` and this host has no haiku, pass this host's low-cost model instead — do not
+     halt. If `dispatch.model` is null/omitted and the prompt, invocation context, or the
+     matching `itemsSource` item has `kind: mechanical`, pass that same low-cost model,
+     overriding the null. Do not invent an engine field for this. Then make exactly one
+     `Agent`-tool call with the given `agent`/`model`/`prompt`, and wait for it to finish.
    - Read `output.md` at `output_path`.
      - If the subagent crashed or `output.md` wasn't written, call `record-result --outcome
        technical_failure` (add `--item {item}` if the dispatch had one).

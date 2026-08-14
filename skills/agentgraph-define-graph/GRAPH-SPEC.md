@@ -78,7 +78,7 @@ deps: [01_fetch_requirements]   # node ids that must complete first
 type: leaf | map | subgraph
 retry: 2                        # optional, default 0 — technical-failure retries only
 agent: reviewer                 # optional, default general-purpose
-model: haiku                    # optional — overrides the agent type's own default model
+model: haiku                    # optional — cheap model; host without haiku uses its low-cost model
 ref: schema-design              # for type: subgraph — a graph name fixed at authoring time
 ref_from: 02_planner_step        # alternative to ref — node id whose output.md's `Graph:` line names the graph at runtime
 map_over: 01_planner             # required if type: map — node id whose items.json to iterate
@@ -102,7 +102,7 @@ convention below, in which case this text is never dispatched as a prompt to any
 | `type` | yes | — | One of `leaf`, `map`, `subgraph`. |
 | `retry` | no | 0 | Number of retries on technical failure (crash / no output produced). Independent of branching. |
 | `agent` | no | `general-purpose` | Subagent type to dispatch this node to (e.g. `reviewer`, `code-writer`, `Explore`). Not used (omit it) when `type: map` and `ref`/`ref_from` is also set — see below. |
-| `model` | no | the `agent` type's own default | Overrides the model this node's subagent runs on (e.g. `haiku`), passed straight through as the subagent-dispatch tool's `model` param at dispatch. Use for mechanical/cheap nodes (e.g. a connectivity check) that don't need the agent type's default model. Not used on `type: map`/`subgraph` nodes whose `ref`/`ref_from` recurses into another graph — the model is set per-node inside the referenced graph.md instead. |
+| `model` | no | the `agent` type's own default | Overrides the model this node's subagent runs on (e.g. `haiku`), passed through as the subagent-dispatch `model` param. If the host has no model by that name, use that host's low-cost model — do not halt. Use for mechanical/cheap nodes (e.g. a connectivity check). Not used on `type: map`/`subgraph` nodes whose `ref`/`ref_from` recurses into another graph — the model is set per-node inside the referenced graph.md instead. |
 | `ref` | one of `ref`/`ref_from` required if `type: subgraph`; also usable on `type: map` | — | Name of another graph under `agent_works/graphs/` to recurse into, fixed when this graph.md was authored. On a `type: map` node (in place of `agent`), marks the per-item template as a nested subgraph invocation rather than a leaf agent call — see "Map-of-subgraphs invocation context" below. |
 | `ref_from` | one of `ref`/`ref_from` required if `type: subgraph`; also usable on `type: map` | — | Node id (in this same graph) whose latest `output.md` supplies the target graph name at runtime via a `Graph:` line. Use when the target isn't known until execution (e.g. a planning node that authors a fresh graph per run). Usable on `type: map` the same way as `ref`. |
 | `map_over` | required if `type: map` | — | Node id whose `items.json` to iterate over. |
@@ -381,8 +381,9 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
   `halt_reason: unmet_dependencies`. Independent ready items may still be fanned out in
   parallel by the host.
 
-- **Dispatch `model` explicitly.** Bookkeeping / mechanical nodes set `model:` to the cheapest
-  available host model. An omitted `model` inherits the (usually expensive) session default.
+- **Dispatch `model` explicitly.** Bookkeeping / mechanical nodes set `model: haiku`. If the
+  host has no haiku, the host uses its low-cost model. An omitted `model` inherits the
+  (usually expensive) session default.
 
 - **Branch from `Result:` first.** The controller matches the `Result:` line before opening the
   rest of `output.md`. Do not paste prior items' `output.md` into the next dispatch — hand a path.
