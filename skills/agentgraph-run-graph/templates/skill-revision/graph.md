@@ -14,16 +14,15 @@
 ```
 
 Standalone extraction of the skill-revision step originally embedded as `multi-feature-pipeline`'s
-`07_skill_revision` map-of-subgraphs node. That node received "which run to inspect" via the
+`05_skill_revision` map-of-subgraphs node. That node received "which run to inspect" via the
 map-of-subgraphs `context.md` mechanism (`{{item.slug}}` plus a hardcoded nested path specific to
 `multi-feature-pipeline`'s own node layout) — a mechanism only available to a node nested inside a
 `type: map` fan-out, not to a standalone top-level graph. Here, the same fixed process (read a
 completed run's outputs for evidence of technical exceptions, revise whichever skill(s) it points
 to) is baked directly into `01_inspect_and_revise`'s prompt, and "which run to inspect" is instead
-sourced from this graph's own top-level invocation context — the same pattern `idea-to-spec`'s
-`01_draft_spec` uses for "the idea" and `feature-kickoff`'s `01_create_feature_branch` uses for
-"the spec path" (freeform text given directly as part of the `agentgraph-run-graph` request, or a
-documented fallback). Mirrors `standard-task`'s implement/review/success/manual-flag shape
+sourced from this graph's own top-level invocation context — the same pattern
+`feature-kickoff`'s `01_create_feature_branch` uses for "the spec path" (freeform text given
+directly as part of the `agentgraph-run-graph` request, or a documented fallback). Mirrors `standard-task`'s implement/review/success/manual-flag shape
 (retry-loop, result-line convention, sticky-research convention on loop-back) rather than
 reinventing it, since the underlying quality bar — a real review pass before anything gets
 committed — is exactly as valuable for a skill edit as for any other code change.

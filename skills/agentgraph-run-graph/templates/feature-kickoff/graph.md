@@ -1,28 +1,28 @@
 ```
 01_create_feature_branch ──► 02_planner ──► 03_tech_plan_reviewer
-                          │                  ├─[Approve]──────────────────────────► 04_load_tasks
-                          │                  ├─[Reject, attempted 3 times]────────► 07_blocked_plan_rejected
-                          │                  └─[Reject, attempted < 3 times]──────► 02_planner  (loop back)
-                          └─[CBM missing]──► 08_needs_manual_review
+                                             ├─[Approve]──────────────────────────► 04_load_tasks
+                                             ├─[Reject, attempted 3 times]────────► 07_blocked_plan_rejected
+                                             └─[Reject, attempted < 3 times]──────► 02_planner  (loop back)
 
 04_load_tasks
- ├─[loaded, env + CBM working]─► 05_run_tasks (map: standard-task per task) ──► 06_final_review
+ ├─[loaded, env working]─► 05_run_tasks (map: standard-task per task) ──► 06_final_review
  │                                                                                  ├─[passed]────────► 09_success
  │                                                                                  └─[issues found]──► 08_needs_manual_review
- └─[env down or CBM missing]─────────────────────────────────────────────────────────────────────────► 08_needs_manual_review
+ └─[env down]──────────────────────────────────────────────────────────────────────────────────────► 08_needs_manual_review
 
 07_blocked_plan_rejected   (terminal — needs human)
 08_needs_manual_review      (terminal — needs human)
-09_success                  (terminal — success)
+09_success                  (terminal — recap)
 ```
 
-This is a worked example of a full feature-delivery graph: turn an approved spec into a branch, a
-reviewed tech plan, a machine-readable task list, then fan the task list out to `standard-task`
-(one subgraph run per task) and finish with a full-suite regression check. It illustrates the
-generic graph patterns (branching, retry, loop-back attempt limits, a cheap gating check pinned to
-a fast model, map-of-subgraphs) — swap the environment-check and test-suite specifics in
-`04_load_tasks`/`06_final_review`/`standard-task` for whatever your own project's build/test
-tooling actually is.
+Full feature-delivery graph: a grilled spec → branch → reviewed tech plan → machine-readable
+task list → `standard-task` (one subgraph run per task) → unfiltered suite check.
+
+The spec is already approved ground truth from a grilling session under `agent_works/specs/`.
+This graph does not draft or rewrite a spec.
+
+Swap the environment-check and test-suite specifics in `04_load_tasks` / `06_final_review` /
+`standard-task` for whatever this project's build/test tooling actually is.
 
 ## 01_create_feature_branch
 
@@ -31,13 +31,13 @@ deps: []
 type: leaf
 retry: 1
 agent: general-purpose
-model: haiku  # fallback: this host's low-cost model
+model: cheap
 ```
 
 Read the feature spec for this run: if the invoker of this graph specified a path, use it;
-otherwise read the most recently modified file under `agent_works/specs/` (the expected drop
-location for a spec written up after stress-testing an idea, e.g. via a "grilling"-style
-skill). If none exists, do not guess — write `output.md` stating that no spec was found and stop here.
+otherwise read the most recently modified file under `agent_works/specs/` (the drop location
+for a spec written after a grilling session). If none exists, do not guess — write `output.md`
+stating that no spec was found and stop here.
 
 Derive a short kebab-case slug from the spec's subject/title.
 
@@ -70,15 +70,44 @@ deps: [01_create_feature_branch]
 type: leaf
 retry: 1
 agent: planner
-branches:
-  - condition: "the planner's Result line is CBM missing"
-    next: 08_needs_manual_review
-  default: 03_tech_plan_reviewer
 ```
 
-Produce a spec + tech plan + task breakdown, plus the same task breakdown as a machine-readable
-task list, for the feature described in the input spec named by `01_create_feature_branch`'s
-latest `output.md`.
+Produce a **tech plan + task breakdown only** — not a spec. The input spec named by
+`01_create_feature_branch`'s latest `output.md` is already approved ground truth from a grilling
+session: read it in full, but do not rewrite, restate, or re-derive it. Your job is turning it
+into an implementation plan and tasks, not re-litigating what it decided.
+
+Follow `agentgraph-vertical-slice-tasks` for task sizing (cut vertical, prefactor first,
+dependencies as blocking edges).
+
+**External documentation (unseen work only).** For APIs, engine features, or libraries the
+spec depends on that this repo has not already shipped a working pattern for, look them up
+and cite URLs. Do not open-ended-explore. Do not use the web to rediscover in-repo facts —
+those still come from CBM (`search_graph` / `trace_path` / `detect_changes`) when connected,
+and from reading files in this repo.
+
+**Trust rule (applies to every codebase claim in the spec you rely on to build the plan, not just
+ones already cited):** a claim is trusted without re-reading only if the spec's `## Verified
+Evidence` section has an entry citing it (`path:line @ <commit-hash> — <claim>`) that passes both
+checks — the cited path has no uncommitted local changes, and `git diff <commit-hash> HEAD --
+<path>` is empty (treat a `git diff` that errors outright, e.g. the hash no longer exists in this
+repo's history, the same as a failed check). A citation of the form `path:line @ uncommitted` never
+passes — always re-verify it directly. Any claim you rely on that isn't covered by a passing
+citation — including every claim in a spec with no `## Verified Evidence` section at all — must be
+verified by reading that file yourself before you build the plan around it. Scope your own
+research to what the tech plan itself needs beyond what the spec already establishes: sequencing,
+which existing modules/tests to touch, concrete task boundaries, and test cases per task — not
+re-verifying facts already covered by a passing citation.
+
+**Code index (CBM):** Prefer CBM. Read `agent_works/INDEX.md` first. CBM is the structural *code*
+graph. Process rules are `CLAUDE.md` / `AGENTS.md` and the current spec/plan — do not
+create `agent_works/memory/`. If INDEX says `CBM: connected` (or a ping of `list_projects` /
+`index_status` succeeds), send structural questions to CBM first (`search_graph` / `trace_path` /
+`detect_changes`). After you write source files, do not trust a pre-write index for those files —
+`detect_changes` or re-read them. If INDEX says `CBM: missing` or the tools do not exist, ping
+once; if still down, write `CBM: missing` plus one line of evidence into `INDEX.md` and a
+**warning** in `output.md`, then continue with targeted file reads. Do not stop. Never grep
+`Library/`, `PackageCache/`, `Temp/`, `ThirdParty/` unless the task names that path.
 
 If a previous attempt of `03_tech_plan_reviewer` already exists in this run
 (`../03_tech_plan_reviewer/attempt-*/output.md` relative to this node's run folder), read its
@@ -86,26 +115,15 @@ latest rejection reasons in full and revise the plan and task list to explicitly
 of them — do not just resubmit the same plan unchanged. Also read this same node's own immediately
 preceding `attempt-{N-1}/output.md` (sticky-research convention) — treat the file paths, line
 numbers, and other facts you already established there as still valid unless the rejection
-specifically contradicts them, rather than re-running the full parallel research pass below from
-scratch. Scope fresh research to exactly what the rejection's findings require re-verifying.
+specifically contradicts them, rather than re-running the full research pass from scratch. Scope
+fresh research to exactly what the rejection's findings require re-verifying.
 
-Follow your own standard process end to end (parallel research, spec, plan, tasks with at least 3
-test cases each and reasonable size, write the plan under `agent_works/plans/{feature-slug}.md`) —
-run this full pipeline only on a fresh (non-retry) attempt; a retry attempt instead revises the
-existing plan/tasks per the sticky-research scoping above, still writing the result to the same
-paths.
-
-**Code index (CBM):** Read `agent_works/INDEX.md` first. CBM is the structural *code*
-graph. Process rules are `CLAUDE.md` / `AGENTS.md` and the current spec/plan — do not
-create `agent_works/memory/`. CBM is **required**. If INDEX says `CBM: missing` or the
-tools do not exist, ping `list_projects` / `index_status`; if still down, stop — write
-`output.md` that CBM is required and end with `Result: CBM missing`. Do not plan from a
-repo-wide grep.
-If INDEX says `CBM: connected` (or your ping succeeds), send structural questions to CBM
-first (`search_graph` / `trace_path` / `detect_changes`). After you write source files,
-do not trust a pre-write index for those files — `detect_changes` or re-read them.
-Never grep `Library/`, `PackageCache/`, `Temp/`, `ThirdParty/` unless the task names that path.
-
+Write the tech plan under `agent_works/plans/{feature-slug}.md`, starting with a `Spec:
+agent_works/specs/{slug}.md` line pointing at the input spec (so a reader opens both) followed by
+the tech plan and task breakdown (tasks with at least 3 test cases each, reasonable size) — do not
+duplicate the spec's own content inline. Run this full pipeline only on a fresh (non-retry)
+attempt; a retry attempt instead revises the existing plan/tasks per the sticky-research scoping
+above, still writing the result to the same paths.
 Also write the same task list out as machine-readable JSON at
 `agent_works/plans/{feature-slug}.tasks.json` — a JSON array of objects with `id`, `title`,
 `description` (≤ 800 characters), `test_cases` (array), `dependencies` (array of other task ids),
@@ -134,9 +152,37 @@ branches:
 ```
 
 Read `02_planner`'s latest `output.md` for the plan file path and tasks JSON file path, then read
-both in full. Perform your standard adversarial review of the plan and every task in it,
-cross-checking that the tasks JSON faithfully mirrors the plan's Tasks section (same tasks, same
-test cases, same dependencies — nothing dropped or invented), and form your usual
+both in full, plus the spec they reference (its `Spec:` line). Follow
+`agentgraph-vertical-slice-tasks` when judging task size and sequencing.
+
+Scope this review to the **plan and tasks**, not the spec's decisions themselves (don't re-litigate
+*what* the spec chose to do). But the spec's underlying *codebase claims* are only exempt from your
+adversarial fact-checking where they're covered by a passing citation: apply the same trust rule
+`02_planner` used — a claim is trusted only if `## Verified Evidence` cites it
+(`path:line @ <commit-hash>`) and that citation still passes (no uncommitted changes to the path,
+`git diff <commit-hash> HEAD -- <path>` empty and not erroring; `@ uncommitted` citations never
+pass). Fact-check every claim the plan depends on that isn't covered by a passing citation —
+including every claim in a spec with no `## Verified Evidence` section at all — the same way you'd
+adversarially fact-check a plan's own claims. When you verify such a claim yourself, append it to
+the spec file's `## Verified Evidence` section using the same citation format (creating the
+section if it doesn't exist), additively, without disturbing existing entries.
+
+**VE scope:** pin only paths a task will edit, or that a task's description / `test_scope`
+explicitly names. Do not cite `Library/`, `PackageCache/`, `Temp/`, or `ThirdParty/` unless
+a task names that path. Skip files that only explain *why* a claim is true if no task will
+touch them.
+
+Beyond that: does the plan actually implement what the spec asks (no drift, no silently dropped
+requirement), are the tasks well-scoped and adequately tested, and are the plan's *own* new claims
+(proposed files/modules to touch, sequencing, feasibility) correct — fact-check those directly too.
+
+Do not use `web_search`, `open_page`, `web_fetch`, or spawn a researcher / explore agent.
+Fact-check against CBM (if connected) and files in this repo only. CBM missing is a warning,
+not a stop.
+
+Perform your standard adversarial review of the plan and every task in it, cross-checking that the
+tasks JSON faithfully mirrors the plan's Tasks section (same tasks, same test cases, same
+dependencies — nothing dropped or invented), and form your usual
 `Verdict: Approve` or `Verdict: Reject — <one-line reason>` conclusion. Then end `output.md` with
 that same conclusion restated as this graph's required single-line `Result:` line — exactly
 `Result: Approve` or `Result: Reject — <one-line reason>` — immediately after your `Verdict:` line,
@@ -149,12 +195,10 @@ deps: [03_tech_plan_reviewer]
 type: leaf
 retry: 1
 agent: general-purpose
-model: haiku  # fallback: this host's low-cost model
+model: cheap
 branches:
-  - condition: "task list loaded, environment working, and CBM connected"
+  - condition: "task list loaded and environment working"
     next: 05_run_tasks
-  - condition: "CBM is missing, empty, or the project is not indexed"
-    next: 08_needs_manual_review
   - condition: "the project's build/test environment is not available/responding"
     next: 08_needs_manual_review
   default: 08_needs_manual_review
@@ -167,10 +211,10 @@ context (below) tells each `standard-task` invocation to trust this result inste
 re-checking. If the environment is not working, do not attempt to load the task list — end
 `output.md` with `Result: environment not working` and stop.
 
-If the environment is working, CBM is **required**. Call `list_projects` and/or `index_status`.
+If the environment is working, prefer CBM. Call `list_projects` and/or `index_status`.
 Write `CBM: connected` or `CBM: missing` plus one line of evidence into `agent_works/INDEX.md`
 (create or update the CBM section). If CBM is missing, empty, or this project is not indexed,
-do not load the task list — end `output.md` with `Result: CBM missing` and stop.
+record a **warning** in `output.md` and continue — do not stop.
 
 Then read `02_planner`'s latest `output.md` for the tasks JSON file path — by construction
 this is the attempt `03_tech_plan_reviewer` approved (a rejection produces a new `02_planner`
@@ -181,7 +225,8 @@ read that JSON file. Each task is expected to have at least: `id`, `title`, `des
 
 Write the task list to `items.json` in this node's attempt folder as a JSON array (copy it
 verbatim from the file found above). End `output.md` with a one-line summary of how many tasks
-were loaded, then a single-line `Result: environment working` conclusion.
+were loaded (and a CBM warning if applicable), then a single-line `Result: environment working`
+conclusion.
 
 ## 05_run_tasks
 
@@ -209,6 +254,7 @@ deps: [05_run_tasks]
 type: leaf
 retry: 0
 agent: general-purpose
+model: cheap
 branches:
   - condition: "every task in 04_load_tasks's items.json has a matching item run that reached standard-task's 04_success terminal node, and the full test suite passed with no failures"
     next: 09_success
@@ -217,7 +263,7 @@ branches:
   default: 08_needs_manual_review
 ```
 
-Quick final check — confirm nothing was skipped, then run the full test suite.
+Quick final check — confirm nothing was skipped, then run the unfiltered suite (or reuse).
 
 1. Read `04_load_tasks`'s latest `items.json` in this run's folder for the full expected task
    list. For every task in it, confirm a corresponding
@@ -225,10 +271,12 @@ Quick final check — confirm nothing was skipped, then run the full test suite.
    `standard-task` run reached the `04_success` terminal node. Flag, by task id/title, any task
    with no matching item folder (skipped entirely) or whose nested run ended anywhere other than
    `04_success` (e.g. `05_manual_flag`, or incomplete).
-2. Unfiltered suite (once). If a `full_suite: true` / `kind: verify` item already recorded
-   green counts in this run and `git status` shows no product/test changes since that run,
-   reuse those counts — do not run the suite again. Otherwise run the project's full
-   automated test suite with no filtering. Report pass/fail/skip counts and failing names.
+2. Unfiltered suite (once per product SHA). Reuse recorded **unfiltered** counts — do not run
+   the suite again — when `git status` shows no product/test changes since that run **and**
+   one of: (a) a `full_suite: true` item already recorded unfiltered green counts, or (b) an
+   earlier `06_final_review` attempt in this run already recorded them. Do **not** treat scoped
+   `kind: verify` counts as a full suite. Otherwise run the project's full automated test suite
+   with no filtering. Report pass/fail/skip counts and failing names.
 
 End `output.md` with: a per-task checklist (task id/title → completed / skipped / failed), the
 test run summary, and a single-line `Result: passed` or
@@ -241,6 +289,7 @@ deps: [03_tech_plan_reviewer]
 type: leaf
 retry: 0
 agent: general-purpose
+model: cheap
 ```
 
 The plan/task-list review loop exhausted 3 attempts without reaching approval, so there is no task
@@ -258,6 +307,7 @@ deps: [04_load_tasks]
 type: leaf
 retry: 0
 agent: general-purpose
+model: cheap
 ```
 
 Reachable two ways: directly from `04_load_tasks` (the build/test environment was down before any
@@ -265,9 +315,8 @@ task ran — no `06_final_review` output exists yet), or via `06_final_review`'s
 branch. Check which applies: if `06_final_review/attempt-*/output.md` exists in this run's folder,
 read it (and, if useful, the per-item outputs under `05_run_tasks`) and write `output.md`
 summarizing why this batch run needs manual attention (skipped/failed tasks, and/or failing
-tests). Otherwise, read `04_load_tasks`'s latest `output.md` (or `02_planner` if this came from a
-CBM-missing planner stop) and write `output.md` summarizing that the environment or CBM
-wasn't reachable before any task could run. Either way, also save
+tests). Otherwise, read `04_load_tasks`'s latest `output.md` and write `output.md` summarizing
+that the environment wasn't reachable before any task could run. Either way, also save
 this summary as a manual follow-up checklist under `agent_works/manual_actions/`, if this project
 uses that convention.
 
@@ -278,9 +327,28 @@ deps: [06_final_review]
 type: leaf
 retry: 0
 agent: general-purpose
-model: haiku  # fallback: this host's low-cost model
+model: cheap
 ```
 
-Read `06_final_review`'s latest `output.md`. Write a short final summary to `output.md`
-confirming every task from the task list was implemented, reviewed, and passed, and that the
-full test suite is green.
+Write a **Recap** a human can read without opening the rest of the run. Every task
+reached `04_success` and `06_final_review` recorded `Result: passed`.
+
+1. Read `06_final_review`'s latest `output.md` for the per-task checklist and suite
+   pass/fail/skip counts.
+2. Read `01_create_feature_branch`'s latest `output.md` for the spec path and branch.
+3. Read `02_planner`'s latest `output.md` for the plan path and tasks JSON path.
+4. Collect **additional docs this run produced or cited** — do not dump unrelated older
+   checklists:
+   - `agent_works/manual_actions/` files named for this feature slug, or that an
+     implement/review `output.md` in this run linked
+   - `agent_works/summary/` files for this slug, if any
+
+Write `output.md` with these headings:
+
+- `## Recap` — one or two short paragraphs: slug, what shipped (task titles from the
+  06 checklist), suite result
+- `## Docs` — repo-relative links to the spec, plan, and tasks JSON
+- `## Follow-up` — repo-relative links to each additional doc from step 4; if none,
+  write `None.`
+
+End with `Result: recap written`.

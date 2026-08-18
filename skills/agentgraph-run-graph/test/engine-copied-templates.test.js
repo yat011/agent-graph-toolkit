@@ -32,15 +32,12 @@ test('resolve-run + next against real templates auto-copies feature-kickoff, the
   writeOutput(d, 'branch created');
   engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
 
-  // 02_planner (branches: CBM missing vs default → reviewer)
+  // 02_planner (no branches — always continues to reviewer)
   d = engine.next({ graphsRoot, runPath });
   assert.equal(d.node_id, '02_planner');
   assert.ok(!d.copied_templates || d.copied_templates.length === 0);
-  writeOutput(d, 'plan produced\nResult: plan written');
+  writeOutput(d, 'plan produced');
   engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
-  d = engine.next({ graphsRoot, runPath });
-  assert.equal(d.status, 'needs_branch');
-  engine.recordBranch({ graphsRoot, runPath, nodeId: '02_planner', useDefault: true });
 
   // 03_tech_plan_reviewer -> Approve
   d = engine.next({ graphsRoot, runPath });
@@ -62,7 +59,7 @@ test('resolve-run + next against real templates auto-copies feature-kickoff, the
     graphsRoot,
     runPath,
     nodeId: d.node_id,
-    match: 'task list loaded, environment working, and CBM connected',
+    match: 'task list loaded and environment working',
   });
 
   // 05_run_tasks (map, ref: standard-task) — this is the nested lookup that must trigger a
@@ -76,6 +73,67 @@ test('resolve-run + next against real templates auto-copies feature-kickoff, the
   const standardTaskContent = fs.readFileSync(path.join(graphsRoot, 'standard-task', 'graph.md'), 'utf8');
   const reviewSection = standardTaskContent.slice(standardTaskContent.indexOf('## 03_review'));
   assert.match(reviewSection, /stage and commit/i);
+});
+
+test('resolve-run + next against real templates auto-copies quick-feature as a leaf-map (no standard-task ref)', () => {
+  const graphsRoot = mkTmpDir();
+
+  let r = engine.resolveRun({ graphsRoot, graphName: 'quick-feature' });
+  assert.equal(r.status, 'ready');
+  const runPath = r.run_path;
+
+  let d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '01_create_feature_branch');
+  assert.deepEqual(d.copied_templates, ['quick-feature']);
+  writeOutput(d, 'branch created');
+  engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
+
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '02_planner');
+  writeOutput(d, 'plan produced');
+  engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
+
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '03_tech_plan_reviewer');
+  writeOutput(d, 'Result: Approve');
+  engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
+  engine.recordBranch({ graphsRoot, runPath, nodeId: d.node_id, match: 'the review\'s Result line is Approve' });
+
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '04_load_tasks');
+  writeOutput(d, 'Result: environment working');
+  fs.writeFileSync(path.join(path.dirname(d.output_path), 'items.json'), JSON.stringify([
+    { id: '1', title: 'do the thing', description: 'desc', test_cases: ['works'], dependencies: [] },
+  ]), 'utf8');
+  engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
+  engine.recordBranch({
+    graphsRoot,
+    runPath,
+    nodeId: d.node_id,
+    match: 'task list loaded and environment working',
+  });
+
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '05_run_tasks');
+  assert.equal(d.item, 'item-1');
+  assert.ok(!d.copied_templates || d.copied_templates.length === 0);
+  assert.ok(!fs.existsSync(path.join(graphsRoot, 'standard-task', 'graph.md')));
+  writeOutput(d, 'Result: implemented');
+  engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, item: d.item, outcome: 'success' });
+
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '06_batch_review');
+  writeOutput(d, 'Result: accepted');
+  engine.recordResult({ graphsRoot, runPath, nodeId: d.node_id, outcome: 'success' });
+  engine.recordBranch({ graphsRoot, runPath, nodeId: d.node_id, match: 'the review\'s Result line is accepted' });
+
+  d = engine.next({ graphsRoot, runPath });
+  assert.equal(d.node_id, '09_success');
+
+  const graphText = fs.readFileSync(path.join(graphsRoot, 'quick-feature', 'graph.md'), 'utf8');
+  assert.match(graphText, /## 10_fix/);
+  assert.match(graphText, /\*\*No external research\.\*\*/);
+  assert.doesNotMatch(graphText, /ref: standard-task/);
 });
 
 test('next omits copied_templates once the local graph directory already exists (no copy needed)', () => {

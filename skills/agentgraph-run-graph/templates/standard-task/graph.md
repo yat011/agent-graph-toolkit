@@ -43,6 +43,11 @@ this graph run (appended below this prompt, or given directly as part of their a
 request) — if no requirements text is present anywhere in your instructions, stop and write to
 `output.md` that requirements are missing rather than guessing at what to build.
 
+**No external search.** Every codebase fact you rely on comes from CBM (`search_graph` /
+`trace_path` / `detect_changes`) when connected, and from reading files in this repo. If
+something is not in the repo, stop with `Result: stopped — <short reason>` rather than
+searching the web or spawning a researcher / explore subagent.
+
 If this is a retry after a previously rejected review, first read the latest
 `03_review/attempt-*/output.md` in this run's folder (if it exists) for the specific issues
 raised, and address those in addition to the original requirements. Also read this same node's own
@@ -61,12 +66,11 @@ context if present; otherwise only the tests for the files this task owns. Do **
 unfiltered project suite unless the item sets `full_suite: true` or `kind: verify`. Report the
 actual pass/fail counts from your own scoped run in `output.md`, never an unverified claim.
 If `kind` is `verify`, change no product files unless a failure has a mechanical fix inside this
-task's file list. Read `agent_works/INDEX.md` first (paths only). CBM is **required**. If INDEX says
-`CBM: missing` or the tools do not exist, stop — end `output.md` with
-`Result: stopped — CBM missing` (routes to `05_manual_flag`). Do not implement from a
-repo-wide grep. If INDEX says `CBM: connected`, send structural questions to CBM first
-(`search_graph` / `trace_path` / `detect_changes`). After you write source, do not trust a
-pre-write index for those files — `detect_changes` or re-read them. Never grep
+task's file list. Read `agent_works/INDEX.md` first (paths only). Prefer CBM. If INDEX says
+`CBM: connected`, send structural questions to CBM first (`search_graph` / `trace_path` /
+`detect_changes`). After you write source, do not trust a pre-write index for those files —
+`detect_changes` or re-read them. If INDEX says `CBM: missing` or the tools do not exist, write
+a **warning** in `output.md` and continue with targeted file reads — do not stop. Never grep
 `Library/`, `PackageCache/`, `Temp/`, `ThirdParty/` unless the task names that path.
 Do not create `agent_works/memory/`.
 Only stop short of green and say so explicitly if a failure
@@ -105,11 +109,23 @@ branches:
   default: 05_manual_flag
 ```
 
-Read the implementation summary from the latest `02_implement_requirements/attempt-*/output.md`
-in this run's folder, plus the actual changed files, and review them against this project's own
-guidelines: SOLID/DRY, no duplicate code, no defensive null checks, test coverage, and correctness
-against the original requirements. Accept or reject. End `output.md` with a single-line
-`Result: accepted` or `Result: rejected — <short reason>` conclusion.
+Read **only**:
+- the `Result:` line of the latest `02_implement_requirements/attempt-*/output.md` in this run's
+  folder (open the rest only if that line is missing or the verdict is unclear)
+- `git status` and `git diff` of product files this task owns
+
+Do not re-run tests — trust the implementer's counts unless the diff makes them implausible.
+Do not dump project rule files unless you reject.
+
+Checklist (one short paragraph each):
+1. SOLID/DRY — reuse existing types; no duplicate framework
+2. No new defensive null checks
+3. Diff matches the item requirements
+4. Off-limits files have zero diff
+5. Tests / miss-path only if the implement `Result:` cites them
+
+Accept or reject. End `output.md` with a single-line `Result: accepted` or
+`Result: rejected — <short reason>` conclusion.
 
 If and only if the result is `accepted`, stage and commit exactly the files `git status` currently
 shows as modified/untracked in the working tree at that point (the current state, not a diff
@@ -137,6 +153,7 @@ deps: [02_implement_requirements]
 type: leaf
 retry: 0
 agent: general-purpose
+model: cheap
 ```
 
 This run needs manual attention. Reachable two ways: directly from `02_implement_requirements`

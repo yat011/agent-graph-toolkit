@@ -20,7 +20,7 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
 
 - A graph name (required). If no local `graph.md` exists yet at
   `agent_works/graphs/{graph-name}/graph.md` and the name matches one of this skill's own
-  `templates/{graph-name}/` (e.g. `feature-kickoff`, `standard-task`), it is auto-copied in on
+  `templates/{graph-name}/` (e.g. `feature-kickoff`, `quick-feature`, `standard-task`, `multi-feature-pipeline`), it is auto-copied in on
   first use — including for nested `subgraph`/`map` lookups reached mid-run, not just the
   top-level graph — so no manual setup step is required for those. `next`'s response reports any
   auto-copy via `copied_templates` (see `CLI-CONTRACT.md`). A graph name that matches neither an
@@ -56,9 +56,9 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
      script's: if there's a gap, do not substitute, narrow scope, or retry around it — call
      `node run-graph.js record-halt --run {run_path} --node {node_id} --reason capability_gap
      --detail "<what's missing>"`, report it to the user, and stop. If `dispatch.model` is
-     `haiku` and this host has no haiku, pass this host's low-cost model instead — do not
+     `cheap` or the legacy alias `haiku`, pass this host's cheapest available model — do not
      halt. If `dispatch.model` is null/omitted and the prompt, invocation context, or the
-     matching `itemsSource` item has `kind: mechanical`, pass that same low-cost model,
+     matching `itemsSource` item has `kind: mechanical`, pass that same cheap model,
      overriding the null. Do not invent an engine field for this. Then make exactly one
      `Agent`-tool call with the given `agent`/`model`/`prompt`, and wait for it to finish.
    - Read `output.md` at `output_path`.
@@ -112,5 +112,6 @@ Re-invoking this skill on a halted graph does **not** resume it automatically �
 
 Implementers run **scoped** tests; the unfiltered suite is the final-review node (or one
 `full_suite: true` item, not both). Judge branches from the `Result:` line first. Do not paste
-prior `output.md` bodies into the next prompt — pass a path. `codebase-memory` is **required**;
-if its MCP tools are missing, the planner / `04_load_tasks` / implementer stop the graph.
+prior `output.md` bodies into the next prompt — pass a path. Prefer `codebase-memory` when
+connected; if it is missing, write `CBM: missing` into `INDEX.md` as a warning and continue
+with targeted file reads. Do not stop the graph.
