@@ -359,10 +359,13 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
 - **Scoped tests; one unfiltered suite.** An implementer runs only `test_scope` (or the tests
   for the files it owns). It must not require an unfiltered project suite before writing
   `Result: implemented`. The batch's unfiltered suite runs once, at the graph's final-review
-  node — or on a single `full_suite: true` item, not both. Final-review reuses recorded
-  **unfiltered** counts only: a `full_suite: true` item, or an earlier final-review attempt
-  in this run, and only when `git status` shows no product/test changes since that run.
-  Scoped `kind: verify` counts are not a full suite — do not reuse them as one.
+  node — or on a single `full_suite: true` item, not both. Exception: `quick-feature`'s
+  `06_batch_review` runs related tests plus direct-dependency tests instead of the
+  unfiltered suite; a 2nd+ attempt of that node reruns only the named failures from
+  the prior attempt, not the related/direct-dep set again. Final-review reuses recorded
+  **unfiltered** counts only: a `full_suite: true` item, or an earlier final-review
+  attempt in this run, and only when `git status` shows no product/test changes since
+  that run. Scoped `kind: verify` counts are not a full suite — do not reuse them as one.
 
 - **Index only.** `agent_works/INDEX.md` is the routing document (paths and skill *names*,
   not file bodies). Do not create `agent_works/memory/`. Process rules live in `CLAUDE.md` /

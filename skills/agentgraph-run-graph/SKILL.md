@@ -111,7 +111,9 @@ Re-invoking this skill on a halted graph does **not** resume it automatically �
   `agent_works/manual_actions/`. Do **not** create `agent_works/memory/` or `open-questions.md`.
 
 Implementers run **scoped** tests; the unfiltered suite is the final-review node (or one
-`full_suite: true` item, not both). Judge branches from the `Result:` line first. Do not paste
-prior `output.md` bodies into the next prompt — pass a path. Prefer `codebase-memory` when
-connected; if it is missing, write `CBM: missing` into `INDEX.md` as a warning and continue
-with targeted file reads. Do not stop the graph.
+`full_suite: true` item, not both). `quick-feature`'s `06_batch_review` is the exception:
+related tests plus direct-dependency tests, not the unfiltered suite; a 2nd+ attempt
+reruns only the named failures from the prior attempt. Judge branches from
+the `Result:` line first. Do not paste prior `output.md` bodies into the next prompt — pass
+a path. Prefer `codebase-memory` when connected; if it is missing, write `CBM: missing`
+into `INDEX.md` as a warning and continue with targeted file reads. Do not stop the graph.

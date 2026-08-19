@@ -25,7 +25,8 @@
 
 Faster feature-delivery graph than `feature-kickoff`: grilled spec → branch → reviewed
 tech plan → task list → implement each task with **no per-task review** → one batch
-review of the whole diff. A reject goes to a single fix node, then back to batch
+review of the whole diff (related tests plus direct-dependency tests, not the
+unfiltered suite). A reject goes to a single fix node, then back to batch
 review, at most 3 review attempts, then the summary node.
 
 No external research anywhere in this graph. Codebase facts come from CBM when
@@ -282,23 +283,40 @@ fix addressed the prior rejection; do not re-derive the whole review from scratc
 2. Review `git status` and `git diff` of product/test files this batch owns (exclude
    `agent_works/graphs/`). Check SOLID/DRY, no duplicate framework, no new defensive null
    checks, off-limits files have zero diff, and the combined diff matches the plan/tasks.
-3. Unfiltered suite (once per product SHA). Reuse recorded **unfiltered** counts when
-   `git status` shows no product/test changes since that run **and** one of: (a) a
-   `full_suite: true` item already recorded unfiltered green counts, or (b) an earlier
-   `06_batch_review` attempt in this run already recorded them. Do **not** treat scoped
-   `kind: verify` counts as a full suite. Otherwise run the project's full automated test
-   suite with no filtering. Report pass/fail/skip counts.
+3. Related tests plus direct-dependency tests. Do **not** run the unfiltered project
+   suite.
+   - **First attempt** (no prior `06_batch_review/attempt-*/output.md` in this run):
+     Reuse recorded related/direct-dep counts when `git status` shows no product/test
+     changes since that run **and** a `full_suite: true` item already recorded
+     unfiltered green counts (a superset). Do **not** treat a single task's scoped
+     `kind: verify` or implement counts as covering the batch. Otherwise run:
+     - **Related tests:** the union of every task's `test_scope` (if present) plus tests
+       for the product files this batch's diff owns.
+     - **Direct-dependency tests:** tests of symbols that directly call (one inbound hop)
+       the changed symbols. Prefer CBM: `detect_changes` (inbound, depth 1) and/or
+       `trace_path(..., include_tests: true, direction: inbound, depth: 1)`. If CBM is
+       missing, skip the graph hop and run related-file tests plus any test files that
+       import the changed modules (targeted file reads).
+   - **2nd+ attempt:** do **not** re-run the related/direct-dep set. Read
+     `Failed tests:` from this node's immediately preceding `attempt-{N-1}/output.md`.
+     Rerun only those named failures (smallest runner filter that selects them — a
+     name or file, not the related set). If `Failed tests: none` or the list is empty,
+     run nothing — reuse the prior passing counts.
+   Name every failing test (`Failed tests: <names>` or `Failed tests: none`). Report
+   pass/fail/skip counts and which filters/files you ran (2nd+ also report
+   carried-forward prior counts).
 
 Accept only if every expected task reached `implemented` or `verified`, the combined diff is
-sound, and the unfiltered suite is green (or validly reused).
+sound, and the related plus direct-dependency tests are green (first attempt: run or
+valid reuse; 2nd+: named failures green or none to rerun).
 
 If and only if the result is `accepted`, stage and commit exactly the files `git status`
 currently shows as modified/untracked **outside `agent_works/graphs/`**, with commit message
 `{slug}: quick-feature` (slug from `01_create_feature_branch`'s latest `output.md`). Do not
 commit on reject.
 
-End `output.md` with a per-task checklist, the review verdict, the suite summary, and exactly
-one of:
+End `output.md` with a per-task checklist, the review verdict, the related/direct-dep test
+summary (including `Failed tests:`), and exactly one of:
 
 ```
 Result: accepted
@@ -358,7 +376,7 @@ Write a **summary** a human can read without opening the rest of the run.
 `06_batch_review` recorded `Result: accepted`.
 
 1. Read `06_batch_review`'s latest `output.md` for the per-task checklist, review verdict, and
-   suite counts.
+   related/direct-dep test counts.
 2. Read `01_create_feature_branch`'s latest `output.md` for the spec path and branch.
 3. Read `02_planner`'s latest `output.md` for the plan path and tasks JSON path.
 4. Collect additional docs this run produced or cited — `agent_works/manual_actions/` and
@@ -367,7 +385,7 @@ Write a **summary** a human can read without opening the rest of the run.
 
 Write `output.md` with these headings:
 
-- `## Recap` — slug, what shipped (task titles from the 06 checklist), suite result, how many
+- `## Recap` — slug, what shipped (task titles from the 06 checklist), related-test result, how many
   review attempts it took
 - `## Docs` — repo-relative links to the spec, plan, and tasks JSON
 - `## Follow-up` — repo-relative links to each additional doc from step 4; if none, `None.`

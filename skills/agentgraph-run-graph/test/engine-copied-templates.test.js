@@ -134,6 +134,14 @@ test('resolve-run + next against real templates auto-copies quick-feature as a l
   assert.match(graphText, /## 10_fix/);
   assert.match(graphText, /\*\*No external research\.\*\*/);
   assert.doesNotMatch(graphText, /ref: standard-task/);
+  const reviewSection = graphText.slice(
+    graphText.indexOf('## 06_batch_review'),
+    graphText.indexOf('## 07_blocked_plan_rejected'),
+  );
+  assert.match(reviewSection, /Related tests plus direct-dependency tests/);
+  assert.match(reviewSection, /\*\*2nd\+ attempt:\*\* do \*\*not\*\* re-run the related\/direct-dep set/);
+  assert.match(reviewSection, /Rerun only those named failures/);
+  assert.doesNotMatch(reviewSection, /run the project's full automated test/);
 });
 
 test('next omits copied_templates once the local graph directory already exists (no copy needed)', () => {
