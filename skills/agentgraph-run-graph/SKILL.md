@@ -42,7 +42,10 @@ unchanged either way; they never see the chain, only their own node's prompt.
 
 This needs a host whose dispatch tool the `graph-runner` agent can call on itself — if the host has
 no subagent-dispatch capability at all, fall back to driving the loop below directly in this
-session instead.
+session instead. On Claude Code specifically, subagent-dispatch capability itself is capped by
+nesting depth (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, default 3) — see `agents/graph-runner.md`
+for what a hop must do when it discovers it has no dispatch tool available (confirmed by live
+testing, not hypothetical).
 
 For a small graph (2-3 leaf nodes, no map/subgraph) the dispatch/hand-off overhead can cost more
 than it saves — driving the loop directly in this session is fine there.

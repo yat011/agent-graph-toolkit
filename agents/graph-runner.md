@@ -48,6 +48,22 @@ reconstructs everything else from `run-state.json` on disk.
    result, and end your turn. Either way, no single hop's own context grows past one node's worth
    of work — that's what actually saves tokens, not whether the call blocks.
 
+   **Nesting-depth ceiling (confirmed by live testing, not hypothetical).** Claude Code caps how
+   deep a subagent may itself dispatch further subagents via `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`
+   (default **3** — see https://code.claude.com/docs/en/sub-agents.md, "Key environment
+   variables"). A live 3-node chain test on this host hit that ceiling exactly as expected: hops 1
+   and 2 dispatched fine, but the depth-3 hop had no subagent-dispatch tool at all in its toolset —
+   it correctly reported that rather than fabricating a result, but the chain then stalled until a
+   session with real dispatch capability (here, the original top-level caller) resumed it manually
+   via `next`. **Implication:** a self-perpetuating chain longer than ~2 hops is not reliable
+   unattended on a default-configured host. Either (a) the host raises
+   `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` before starting the run, or (b) whoever dispatches hop 1
+   should be prepared to resume the run itself (via `status`/`next`, same as any halted-run
+   recovery) if a hop ever reports it has no dispatch tool available — that hop must never fake a
+   dispatch or a `record-result` in that situation; leaving `run-state.json` untouched at exactly
+   the last-completed node is the correct, safe failure mode, matching what `record-halt`'s
+   `capability_gap` reason already covers for a single node's tool gap.
+
    **Default to a blocking hand-off**, not fire-and-forget, even if your host supports launching a
    subagent without waiting on it. A non-blocking hand-off breaks completion reporting: if hop `N`
    dispatches hop `N+1` asynchronously and ends its own turn immediately, the host reports hop `N`
