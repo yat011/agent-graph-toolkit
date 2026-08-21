@@ -20,7 +20,7 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
 
 - A graph name (required). If no local `graph.md` exists yet at
   `agent_works/graphs/{graph-name}/graph.md` and the name matches one of this skill's own
-  `templates/{graph-name}/` (e.g. `feature-kickoff`, `quick-feature`, `standard-task`, `multi-feature-pipeline`), it is auto-copied in on
+  `templates/{graph-name}/` (e.g. `feature-kickoff`, `standard-task`), it is auto-copied in on
   first use — including for nested `subgraph`/`map` lookups reached mid-run, not just the
   top-level graph — so no manual setup step is required for those. `next`'s response reports any
   auto-copy via `copied_templates` (see `CLI-CONTRACT.md`). A graph name that matches neither an
@@ -29,14 +29,32 @@ For the `graph.md` schema, node types, and `runs/` folder layout, see
 - Optionally, "redrive `{graph-name}`" to resume a *halted* run after fixing whatever caused it
   (pass `--redrive`). A halted run is never auto-resumed without this explicit ask.
 
-## Loop
+## Hand-off mode (default for multi-node graphs)
+
+A long graph run driven inline, one session dispatching every node in sequence, accumulates that
+session's own transcript across every node — real token cost that buys nothing, since
+`run-state.json` is already the complete resumable source of truth after every node (see
+`GRAPH-SPEC.md`'s checkpoint convention). Prefer handing the loop itself off instead: dispatch the
+`graph-runner` agent to drive step 1 below (`resolve-run`) and the first `next`/dispatch, and let
+it hand off to a fresh copy of itself for every subsequent hop — see `agents/graph-runner.md` for
+exactly what each hop does. Domain node agents (`planner`, `code-writer`, `reviewer`, etc.) are
+unchanged either way; they never see the chain, only their own node's prompt.
+
+This needs a host whose dispatch tool the `graph-runner` agent can call on itself — if the host has
+no subagent-dispatch capability at all, fall back to driving the loop below directly in this
+session instead.
+
+For a small graph (2-3 leaf nodes, no map/subgraph) the dispatch/hand-off overhead can cost more
+than it saves — driving the loop directly in this session is fine there.
+
+## Loop (direct-session fallback, or what each `graph-runner` hop does internally)
 
 1. On a fresh run (not a resume/redrive), derive a short kebab-case slug for what this run's input
    is actually about (e.g. the feature/idea slug, not the graph name — that's already implied by
    `--graph`) and pass it as `--slug`, so the run folder stays identifiable when a `runs/`
    directory accumulates several runs over time. Skip this on `--redrive` (irrelevant — an existing
-   run's folder is reused) and when the run has no natural single-subject slug (e.g. a
-   `multi-feature-pipeline`-style batch run with no one topic).
+   run's folder is reused) and when the run has no natural single-subject slug (e.g. a batch run
+   over several unrelated inputs with no one topic).
    Call `node run-graph.js resolve-run --graph {graph-name} [--redrive] [--fresh] [--slug {slug}]`.
    - `{status:"blocked", reason:"halted_run_exists", ...}` — report the halt (node, reason) and
      stop; tell the user to ask for a redrive (once fixed) or an explicit fresh start.
@@ -111,9 +129,7 @@ Re-invoking this skill on a halted graph does **not** resume it automatically �
   `agent_works/manual_actions/`. Do **not** create `agent_works/memory/` or `open-questions.md`.
 
 Implementers run **scoped** tests; the unfiltered suite is the final-review node (or one
-`full_suite: true` item, not both). `quick-feature`'s `06_batch_review` is the exception:
-related tests plus direct-dependency tests, not the unfiltered suite; a 2nd+ attempt
-reruns only the named failures from the prior attempt. Judge branches from
+`full_suite: true` item, not both). Judge branches from
 the `Result:` line first. Do not paste prior `output.md` bodies into the next prompt — pass
 a path. Prefer `codebase-memory` when connected; if it is missing, write `CBM: missing`
 into `INDEX.md` as a warning and continue with targeted file reads. Do not stop the graph.

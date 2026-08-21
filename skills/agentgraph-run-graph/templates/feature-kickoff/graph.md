@@ -80,11 +80,15 @@ into an implementation plan and tasks, not re-litigating what it decided.
 Follow `agentgraph-vertical-slice-tasks` for task sizing (cut vertical, prefactor first,
 dependencies as blocking edges).
 
-**External documentation (unseen work only).** For APIs, engine features, or libraries the
-spec depends on that this repo has not already shipped a working pattern for, look them up
-and cite URLs. Do not open-ended-explore. Do not use the web to rediscover in-repo facts —
-those still come from CBM (`search_graph` / `trace_path` / `detect_changes`) when connected,
-and from reading files in this repo.
+**Do not run your own agent definition's `## 1. Research` step in this context** — specifically,
+do not dispatch the parallel `researcher` subagents (external or codebase) it describes. External
+documentation for this feature was already the grilling session's job before the spec was
+approved; re-researching it here is redundant spend. If, while turning the spec into tasks, you
+hit a genuinely unseen gap (an API/library detail the spec doesn't cover and this repo has no
+existing pattern for), look it up yourself directly — do not spawn a subagent for it — and cite
+the URL. Do not open-ended-explore. Do not use the web to rediscover in-repo facts — those come
+from CBM (`search_graph` / `trace_path` / `detect_changes`) when connected, and from reading files
+in this repo.
 
 **Trust rule (applies to every codebase claim in the spec you rely on to build the plan, not just
 ones already cited):** a claim is trusted without re-reading only if the spec's `## Verified

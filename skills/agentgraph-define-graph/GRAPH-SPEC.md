@@ -32,6 +32,10 @@ agent_works/graphs/{graph-name}/
                                                  # started without a --slug (agentgraph-run-graph's
                                                  # resolve-run --slug flag)
       run-state.json                         # top-level run bookkeeping
+      progress.log                           # append-only, one line per record-result/record-branch/
+                                              # record-halt/invalidate event — never rewritten, so it's
+                                              # cheap to tail for a quick "what's happened so far" without
+                                              # re-reading/re-parsing run-state.json
       {seq}_{node-id}/
         attempt-1/
           output.md                          # present if this node is a leaf
@@ -56,7 +60,13 @@ prefixes — not a 0-indexed array position. Element `i` (0-based) of the source
 lives in `item-{i+1}/`.
 
 `run-state.json` tracks, per node: `status` (`pending` / `running` / `completed` / `halted` /
-`bypassed`), `attempt`, and (if the node declares `branches`) `branch_decision`. A `type: map`
+`bypassed` / `invalidated`), `attempt`, and (if the node declares `branches`) `branch_decision`.
+`invalidated` is set by `agentgraph-run-graph`'s `invalidate` CLI command (see CLI-CONTRACT.md) —
+distinct from `pending` so the node's prior `attempt-N/` folders stay on disk for audit — on a
+node a human determined needs a targeted re-run, plus everything transitively downstream of it;
+the invalidated entry also carries `invalidated_reason` (the human-supplied reason, direct target
+only), `invalidated_because` (the upstream node id that caused a cascaded invalidation, downstream
+nodes only), and `invalidated_at`. A `type: map`
 node's entry additionally carries an `items` map (`item-1`, `item-2`, ... → the same per-node
 shape, recursively). A `type: subgraph` node's entry additionally carries its nested run's own
 state under a `subgraph_state` key — **always a nested JSON object matching this same shape
@@ -359,10 +369,7 @@ These conventions are normative and apply verbatim to both `agentgraph-define-gr
 - **Scoped tests; one unfiltered suite.** An implementer runs only `test_scope` (or the tests
   for the files it owns). It must not require an unfiltered project suite before writing
   `Result: implemented`. The batch's unfiltered suite runs once, at the graph's final-review
-  node — or on a single `full_suite: true` item, not both. Exception: `quick-feature`'s
-  `06_batch_review` runs related tests plus direct-dependency tests instead of the
-  unfiltered suite; a 2nd+ attempt of that node reruns only the named failures from
-  the prior attempt, not the related/direct-dep set again. Final-review reuses recorded
+  node — or on a single `full_suite: true` item, not both. Final-review reuses recorded
   **unfiltered** counts only: a `full_suite: true` item, or an earlier final-review
   attempt in this run, and only when `git status` shows no product/test changes since
   that run. Scoped `kind: verify` counts are not a full suite — do not reuse them as one.

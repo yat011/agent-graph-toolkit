@@ -73,6 +73,16 @@ const COMMANDS = {
     required: ['run'],
     handler: cmdStatus,
   },
+  invalidate: {
+    options: {
+      run: { type: 'string' },
+      node: { type: 'string' },
+      reason: { type: 'string' },
+      'graphs-root': { type: 'string' },
+    },
+    required: ['run', 'node', 'reason'],
+    handler: cmdInvalidate,
+  },
 };
 
 function main(argv) {
@@ -195,6 +205,15 @@ function cmdRecordHalt(values) {
 
 function cmdStatus(values) {
   return engine.status({ runPath: path.resolve(values.run) });
+}
+
+function cmdInvalidate(values) {
+  return engine.invalidate({
+    graphsRoot: inferGraphsRoot(values),
+    runPath: path.resolve(values.run),
+    nodeId: values.node,
+    reason: values.reason,
+  });
 }
 
 function emit(obj) {

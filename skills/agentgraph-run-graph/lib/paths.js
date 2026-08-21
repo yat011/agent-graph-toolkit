@@ -37,6 +37,10 @@ function runStatePath(dirPath) {
   return path.join(dirPath, 'run-state.json');
 }
 
+function progressLogPath(dirPath) {
+  return path.join(dirPath, 'progress.log');
+}
+
 function runsRoot(graphsRoot, graphName) {
   return path.join(graphsRoot, graphName, 'runs');
 }
@@ -53,6 +57,7 @@ module.exports = {
   itemsJsonPath,
   contextMdPath,
   runStatePath,
+  progressLogPath,
   runsRoot,
   graphMdPath,
   graphDir,

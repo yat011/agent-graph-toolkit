@@ -59,4 +59,29 @@ function sleepSync(ms) {
   Atomics.wait(ia, 0, 0, ms);
 }
 
-module.exports = { readState, writeState, StateStoreError };
+// Append-only, one line per event — never rewritten in place. Unlike run-state.json (rewritten
+// wholesale on every mutation, so it carries no cache-stable prefix), this file's earlier lines
+// never change, so a reader (human or agent) can cheaply tail it instead of re-reading/re-parsing
+// the full JSON state just to see what's happened recently.
+function appendProgressLine(logPath, line) {
+  const dir = path.dirname(logPath);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(logPath, `${line}\n`, 'utf8');
+}
+
+// Reads only the last `n` lines without holding the whole file if it's ever large — for a
+// run's progress.log this is normally tiny, but this keeps the read cost proportional to what's
+// asked for rather than the file's full history.
+function tailLines(logPath, n) {
+  let raw;
+  try {
+    raw = fs.readFileSync(logPath, 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw new StateStoreError(`progress.log not found/readable at ${logPath}: ${err.message}`);
+  }
+  const lines = raw.split('\n').filter((l) => l.length > 0);
+  return lines.slice(Math.max(0, lines.length - n));
+}
+
+module.exports = { readState, writeState, appendProgressLine, tailLines, StateStoreError };

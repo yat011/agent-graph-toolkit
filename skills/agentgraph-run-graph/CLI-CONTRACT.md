@@ -6,6 +6,14 @@ includes `schemaVersion: 1`. Exit code `0` covers every well-formed computed ans
 `blocked`/`halted`/`complete`); exit code `1` is reserved for command-level errors (bad args,
 corrupt state, missing graph.md, misuse).
 
+Every `record-result`/`record-branch`/`record-halt`/`invalidate` call also appends one line to
+`progress.log` next to `run-state.json` (see GRAPH-SPEC.md's file layout). Unlike `run-state.json`
+(rewritten wholesale on every mutation), this file is append-only — earlier lines never change —
+so reorienting on a run (a human skimming it, or a fresh `graph-runner` hop with no prior context)
+can cheaply tail its last few lines instead of re-reading/re-parsing the full JSON state just to
+see what happened recently. It is a convenience trail, not authoritative — `status` / `next` are
+still the source of truth for what to do next.
+
 ## Commands
 
 ### `resolve-run --graph <name> [--redrive] [--fresh] [--slug <text>] [--graphs-root <path>]`
@@ -51,7 +59,7 @@ If nothing is ready or in-progress and some items still wait on unfinished deps 
 `next` returns `{status:"halted", halt_reason:"unmet_dependencies"}`.
 
 Responses:
-- `{status:"dispatch", run_path, node_id, node_type, item?, attempt, output_path, agent, model, prompt, has_branches, is_redrive, copied_templates?}`
+- `{status:"dispatch", run_path, node_id, node_type, item?, attempt, output_path, agent, model, prompt, has_branches, is_redrive, is_invalidated, copied_templates?}`
 - `{status:"needs_branch", run_path, node_id, copied_templates?}` — this node already succeeded
   (`record-result` ran) but no `record-branch` call was ever recorded for it, most likely because
   the process/session was interrupted between the two calls. Nothing to dispatch: re-read that
@@ -82,3 +90,28 @@ Response: `{status:"ok", run_path}`. Exits 1 if the run is already halted.
 ### `status --run <run_path>`
 
 Response: `{status, total_executions, halt_reason, nodes}` — full run-state summary.
+
+### `invalidate --run <run_path> --node <id> --reason "<text>" [--graphs-root <path>]`
+
+Forces a targeted re-run of a node whose output a human has determined is wrong, plus everything
+transitively downstream of it (per `deps`, and a `type: map` node's `map_over` source), without
+touching any other node. The target node must currently be `completed` or `bypassed` — exits 1 if
+the run doesn't exist, the node id is unknown, the node is still `pending` (never executed), or
+`running` (use `record-result`/wait instead). Every downstream node that is `completed`/`bypassed`
+is set to `invalidated` too; downstream nodes already `pending`/`invalidated` are left alone. If
+any downstream node is `running`, the command refuses and mutates nothing (exits 1) rather than
+touch an in-flight run.
+
+`invalidated` is a distinct `run-state.json` status from `pending` — see GRAPH-SPEC.md — so the
+node's prior `attempt-N/` folders stay on disk for audit. Only the directly-targeted node stores
+the human-supplied `--reason` (as `invalidated_reason`); cascaded downstream nodes instead store
+`invalidated_because: <nodeId>`, tracing back to the originally-invalidated node's own reason.
+`next`'s composed prompt for an invalidated node's next dispatch prepends an invalidation notice
+(analogous to the redrive notice) including that reason — directly for the targeted node, or "an
+upstream dependency was invalidated: `<reason>`" for a cascaded one — and the dispatch response
+carries `is_invalidated: true` for that one call. A fresh dispatch for an invalidated node bumps
+its `attempt` as usual (a new `attempt-N/` folder), it does not overwrite the prior attempt.
+
+Response: `{status:"ok", run_path, node_id, node_status:"invalidated", downstream_invalidated: string[]}`.
+Exits 1 (no mutation) if the run is already halted, `--reason` is empty, the node id is unknown,
+the node isn't `completed`/`bypassed`, or a downstream node is `running`.

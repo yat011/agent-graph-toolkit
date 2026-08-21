@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseGraph, GraphParseError } = require('../lib/graph-parser');
+const { parseGraph, GraphParseError, downstreamOf } = require('../lib/graph-parser');
 const { mkTmpDir } = require('./helpers');
 
 test('parses a 2-node fixture with deps, type, branches, multi-line body', () => {
@@ -129,4 +129,31 @@ receipt: true
     assert.match(err.message, /subgraph/);
     return true;
   });
+});
+
+function nodesMapOf(defs) {
+  // defs: [{id, deps, map_over}]
+  return new Map(defs.map((d) => [d.id, { deps: d.deps || [], map_over: d.map_over || null }]));
+}
+
+test('downstreamOf computes the full transitive set through a diamond, excluding the target and unrelated siblings', () => {
+  const nodesMap = nodesMapOf([
+    { id: '01_a', deps: [] },
+    { id: '02_b', deps: ['01_a'] },
+    { id: '03_c', deps: ['02_b'] },
+    { id: '02_sibling', deps: ['01_a'] },
+  ]);
+  const down = downstreamOf(nodesMap, '01_a');
+  assert.deepEqual([...down].sort(), ['02_b', '02_sibling', '03_c']);
+  assert.equal(downstreamOf(nodesMap, '03_c').size, 0);
+});
+
+test('downstreamOf treats map_over as an implicit dependency edge even without a matching deps entry', () => {
+  const nodesMap = nodesMapOf([
+    { id: '01_planner', deps: [] },
+    { id: '02_map', deps: [], map_over: '01_planner' },
+    { id: '03_after_map', deps: ['02_map'] },
+  ]);
+  const down = downstreamOf(nodesMap, '01_planner');
+  assert.deepEqual([...down].sort(), ['02_map', '03_after_map']);
 });

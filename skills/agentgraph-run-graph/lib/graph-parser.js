@@ -140,4 +140,33 @@ function parseGraph(graphPath) {
   return nodes;
 }
 
-module.exports = { parseGraph, GraphParseError };
+// Computes the transitive set of node ids that (directly or indirectly) depend on `nodeId`,
+// walking `deps` in reverse. `map_over` is treated as an implicit dependency edge alongside
+// `deps`: a `type: map` node's items are sourced from its `map_over` node's items.json output
+// (and any cross-item `dependencies` declared inside that items.json only make sense relative to
+// that map's own itemsSource, which is entirely regenerated whenever the map re-runs), so the map
+// node counts as downstream of its `map_over` source even on graphs that omit the redundant
+// `deps: [{map_over}]` entry. Operates on a single graph's `nodesMap` (id -> node, each with a
+// `.deps` array and optional `.map_over`) as returned by `parseGraph`/`loadGraph` — call it with
+// whichever graph.md scope the target node actually lives in (the top-level graph, or a nested
+// subgraph's own graph.md). Returns a Set of node ids; excludes `nodeId` itself.
+function downstreamOf(nodesMap, nodeId) {
+  const downstream = new Set();
+  let frontier = new Set([nodeId]);
+  while (frontier.size > 0) {
+    const nextFrontier = new Set();
+    for (const [id, def] of nodesMap) {
+      if (downstream.has(id) || frontier.has(id)) continue;
+      const dependsOnFrontier = def.deps.some((d) => frontier.has(d)) ||
+        (def.map_over && frontier.has(def.map_over));
+      if (dependsOnFrontier) {
+        downstream.add(id);
+        nextFrontier.add(id);
+      }
+    }
+    frontier = nextFrontier;
+  }
+  return downstream;
+}
+
+module.exports = { parseGraph, GraphParseError, downstreamOf };

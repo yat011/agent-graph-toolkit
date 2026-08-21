@@ -1,8 +1,8 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseGraph, GraphParseError } = require('./graph-parser');
-const { readState, writeState } = require('./state-store');
+const { parseGraph, GraphParseError, downstreamOf } = require('./graph-parser');
+const { readState, writeState, appendProgressLine } = require('./state-store');
 const P = require('./paths');
 
 class EngineError extends Error {
@@ -17,6 +17,30 @@ const REDRIVE_NOTICE =
   'node. Before doing any new work, check current on-disk/git state for artifacts left by the ' +
   'prior failed attempt(s) (uncommitted edits, partial output, existing branches) and account ' +
   'for them rather than assuming a clean slate (see GRAPH-SPEC.md\'s Retry idempotency note).';
+
+const INVALIDATION_NOTICE_PREFIX =
+  'This is a targeted re-run triggered by a human `invalidate` command, not a normal first ' +
+  'attempt or a technical retry. Before doing any new work, check current on-disk/git state for ' +
+  'artifacts left by the invalidated prior attempt(s) and account for them rather than assuming ' +
+  'a clean slate.';
+
+// Builds the invalidation-notice text for a node whose entry.invalidation_pending is true.
+// Direct target (invalidated via its own `--reason`) vs. cascade downstream (invalidated because
+// an upstream dependency was invalidated) get different wording; the cascade case traces back to
+// the originally-invalidated node's own recorded reason via `invalidated_because`, so the human's
+// stated reason for the whole cascade stays visible even N hops downstream.
+function buildInvalidationNotice(unit, entry) {
+  if (entry.invalidated_reason) {
+    return `${INVALIDATION_NOTICE_PREFIX} A human invalidated this node's prior output. Reason: ${entry.invalidated_reason}`;
+  }
+  if (entry.invalidated_because) {
+    const rootEntry = unit.state.nodes[entry.invalidated_because];
+    const rootReason = (rootEntry && rootEntry.invalidated_reason) || '(reason unavailable)';
+    return `${INVALIDATION_NOTICE_PREFIX} Re-running because an upstream dependency ` +
+      `('${entry.invalidated_because}') was invalidated: ${rootReason}`;
+  }
+  return INVALIDATION_NOTICE_PREFIX;
+}
 
 // ---------- topo sort ----------
 
@@ -262,9 +286,14 @@ function buildLeafDispatch(unit, node, entry, attemptDirPath) {
   const outputRelPath = P.outputPath(attemptDirPath);
   let prompt = composeLeafPrompt(unit, node, outputRelPath);
   const isRedrive = !!entry.redrive_pending;
+  const isInvalidated = !isRedrive && !!entry.invalidation_pending;
   if (isRedrive) {
     prompt = `${node.body}\n\n---\n${REDRIVE_NOTICE}\n\n` + prompt.slice(node.body.length + 2);
     entry.redrive_pending = false;
+  } else if (isInvalidated) {
+    const notice = buildInvalidationNotice(unit, entry);
+    prompt = `${node.body}\n\n---\n${notice}\n\n` + prompt.slice(node.body.length + 2);
+    entry.invalidation_pending = false;
   }
   return {
     type: 'dispatch',
@@ -277,6 +306,7 @@ function buildLeafDispatch(unit, node, entry, attemptDirPath) {
     prompt,
     has_branches: !!node.branches,
     is_redrive: isRedrive,
+    is_invalidated: isInvalidated,
   };
 }
 
@@ -775,6 +805,7 @@ function recordResult({ graphsRoot, runPath, nodeId, item, outcome }) {
     }
   }
   writeState(statePath, state);
+  logProgress(runPath, nodeId, { item, event: 'result', outcome, status: entry.status });
   return { status: 'ok', run_path: runPath, node_status: entry.status };
 }
 
@@ -816,6 +847,17 @@ function loadNodeDefForChain(graphsRoot, topGraphName, chain, nodeId) {
     throw new EngineError(`Node '${nodeId}' not found in graph '${graphName}' (${P.graphMdPath(graphsRoot, graphName)})`);
   }
   return nodeDef;
+}
+
+// One line per event, appended to `progress.log` next to run-state.json — see state-store.js for
+// why this is append-only rather than folded into the JSON rewrite.
+function logProgress(runPath, nodeId, fields) {
+  const parts = [`ts=${new Date().toISOString()}`, `node=${nodeId}`];
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === null || v === undefined) continue;
+    parts.push(`${k}=${JSON.stringify(String(v))}`);
+  }
+  appendProgressLine(P.progressLogPath(runPath), parts.join(' '));
 }
 
 function markRunHalted(state, nodeId, reason) {
@@ -863,6 +905,7 @@ function recordBranch({ graphsRoot, runPath, nodeId, match, useDefault, none }) 
       entry.status = 'halted';
       propagateHalt(state, chain, 'unresolved_branch');
       writeState(statePath, state);
+      logProgress(runPath, nodeId, { event: 'branch', match: 'unresolved', halt: 'unresolved_branch' });
       return { status: 'ok', run_path: runPath, run_status: 'halted' };
     }
   }
@@ -889,6 +932,7 @@ function recordBranch({ graphsRoot, runPath, nodeId, match, useDefault, none }) 
   scopeState.forced_next = chosen;
 
   writeState(statePath, state);
+  logProgress(runPath, nodeId, { event: 'branch', match: decision.matched, next: decision.next });
   return { status: 'ok', run_path: runPath };
 }
 
@@ -930,7 +974,80 @@ function recordHalt({ graphsRoot, runPath, nodeId, reason, detail }) {
   state.nodes[nodeId].halt_detail = detail || null;
   markRunHalted(state, nodeId, reason);
   writeState(statePath, state);
+  logProgress(runPath, nodeId, { event: 'halt', reason, detail });
   return { status: 'ok', run_path: runPath };
+}
+
+// Forces a targeted re-run of a node that already produced output a human has decided is wrong
+// (e.g. "found subtly wrong output in code review"), plus everything transitively downstream of
+// it. Sets the target node's status to `invalidated` (distinct from `pending` so its `attempt-N/`
+// history stays on disk for audit) with the human-supplied `reason` recorded on its entry, then
+// cascades `invalidated` onto every downstream node (per `downstreamOf`) that is currently
+// `completed`/`bypassed` — those don't get their own reason, only `invalidated_because` pointing
+// back at `nodeId` so the cascade's cause stays traceable via the root entry's own reason. Nodes
+// already `pending`/`invalidated` are left alone (nothing to do); any downstream node caught
+// `running` aborts the whole command without mutating state (conflicting with an in-flight run).
+function invalidate({ graphsRoot, runPath, nodeId, reason }) {
+  if (!reason) throw new EngineError('--reason is required');
+  const statePath = P.runStatePath(runPath);
+  const state = readState(statePath);
+  if (state.status === 'halted') throw new EngineError('run already halted');
+
+  const chain = locateChain(state, nodeId, null, () => true);
+  if (!chain) throw new EngineError(`No entry found for node '${nodeId}'`);
+  const { entry, state: scopeState } = chain[chain.length - 1];
+  if (entry.status !== 'completed' && entry.status !== 'bypassed') {
+    throw new EngineError(
+      `Cannot invalidate node '${nodeId}': status is '${entry.status}' (must be 'completed' or 'bypassed')`
+    );
+  }
+
+  const topGraphName = graphNameFromRunPath(runPath, graphsRoot);
+  const scopeGraphName = graphNameForNode(topGraphName, chain, nodeId);
+  const { nodesMap: scopeNodesMap } = loadGraph(graphsRoot, scopeGraphName);
+  const downstreamIds = downstreamOf(scopeNodesMap, nodeId);
+
+  for (const id of downstreamIds) {
+    const e = scopeState.nodes[id];
+    if (e && e.status === 'running') {
+      throw new EngineError(`Cannot invalidate '${nodeId}': downstream node '${id}' is currently running`);
+    }
+  }
+
+  const now = new Date().toISOString();
+  entry.status = 'invalidated';
+  entry.invalidated_reason = reason;
+  entry.invalidated_because = null;
+  entry.invalidated_at = now;
+  entry.invalidation_pending = true;
+
+  const downstreamInvalidated = [];
+  for (const id of downstreamIds) {
+    const e = scopeState.nodes[id];
+    if (!e) continue; // never executed at this scope; nothing to invalidate
+    if (e.status === 'completed' || e.status === 'bypassed') {
+      e.status = 'invalidated';
+      e.invalidated_reason = null;
+      e.invalidated_because = nodeId;
+      e.invalidated_at = now;
+      e.invalidation_pending = true;
+      downstreamInvalidated.push(id);
+    }
+  }
+
+  writeState(statePath, state);
+  logProgress(runPath, nodeId, {
+    event: 'invalidate',
+    reason,
+    downstream: downstreamInvalidated.length ? downstreamInvalidated.join(',') : null,
+  });
+  return {
+    status: 'ok',
+    run_path: runPath,
+    node_id: nodeId,
+    node_status: entry.status,
+    downstream_invalidated: downstreamInvalidated,
+  };
 }
 
 function status({ runPath }) {
@@ -956,5 +1073,6 @@ module.exports = {
   recordResult,
   recordBranch,
   recordHalt,
+  invalidate,
   status,
 };
