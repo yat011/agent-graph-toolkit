@@ -28,7 +28,8 @@ Node types: `leaf`, `map`, `subgraph`.
 agent_works/graphs/{graph-name}/
   graph.md                                   # graph definition (see schema below)
   runs/
-    {input-slug}_{graph-name}_{timestamp}/      # {input-slug}_ prefix omitted if the run was
+    {timestamp}_{input-slug}/                   # timestamp sorts runs chronologically; falls back
+                                                 # to {timestamp}_{graph-name} if the run was
                                                  # started without a --slug (agentgraph-run-graph's
                                                  # resolve-run --slug flag)
       run-state.json                         # top-level run bookkeeping
@@ -190,7 +191,7 @@ Read all implementation outputs matching
 After `01_planner` completes (produces 2 tasks):
 
 ```
-agent_works/graphs/example-graph/runs/example-plan_20260801T120000/
+agent_works/graphs/example-graph/runs/20260801T120000_example-plan/
   run-state.json
   01_planner/
     attempt-1/
@@ -202,7 +203,7 @@ After `02_per_task_impl` completes both items (a `map` node — no separate `ite
 own, it fans out over `01_planner`'s `items.json`):
 
 ```
-agent_works/graphs/example-graph/runs/example-plan_20260801T120000/
+agent_works/graphs/example-graph/runs/20260801T120000_example-plan/
   run-state.json
   01_planner/
     attempt-1/
@@ -224,7 +225,7 @@ name — item retries bump only the item's own `attempt-N`; here the whole map n
 gets its own `attempt-2`):
 
 ```
-agent_works/graphs/example-graph/runs/example-plan_20260801T120000/
+agent_works/graphs/example-graph/runs/20260801T120000_example-plan/
   run-state.json
   01_planner/
     attempt-1/

@@ -64,6 +64,16 @@ reconstructs everything else from `run-state.json` on disk.
    the last-completed node is the correct, safe failure mode, matching what `record-halt`'s
    `capability_gap` reason already covers for a single node's tool gap.
 
+   **If you are the hop that discovers it has no dispatch tool: stop immediately, do not
+   investigate.** This is a known, already-diagnosed platform limit, not a bug in your environment
+   or in `run-graph.js`. Do not retry the dispatch, do not search for an alternate tool name or
+   permission fix, do not call `record-halt` (this is not a graph-level halt — the run is still
+   perfectly resumable), and do not spend a turn reasoning about *why* the tool is missing. Just
+   report, verbatim: "No subagent-dispatch tool available at this depth — hit
+   `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` (see `agents/graph-runner.md`). `run_path` is
+   `{run_path}`, last completed node was `{node_id}`. Resume with `next --run {run_path}` from a
+   session with dispatch capability (e.g. the original top-level caller)." Then end your turn.
+
    **Default to a blocking hand-off**, not fire-and-forget, even if your host supports launching a
    subagent without waiting on it. A non-blocking hand-off breaks completion reporting: if hop `N`
    dispatches hop `N+1` asynchronously and ends its own turn immediately, the host reports hop `N`

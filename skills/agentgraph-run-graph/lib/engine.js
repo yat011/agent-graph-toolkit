@@ -597,7 +597,7 @@ function resolveRun({ graphsRoot, graphName, redrive, fresh, slug }) {
   const graphSlug = graphName.replace(/[^a-z0-9-]+/gi, '-');
   const inputSlug = slug ? slug.replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '') : '';
   const ts = timestamp();
-  const runFolderName = inputSlug ? `${inputSlug}_${graphSlug}_${ts}` : `${graphSlug}_${ts}`;
+  const runFolderName = inputSlug ? `${ts}_${inputSlug}` : `${ts}_${graphSlug}`;
   const runPath = path.join(runsDir, runFolderName);
   fs.mkdirSync(runPath, { recursive: true });
   const initial = { status: 'running', total_executions: 0, halt_reason: null, nodes: {} };

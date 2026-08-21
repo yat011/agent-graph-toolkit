@@ -23,9 +23,10 @@ Finds or starts a run for `{graphs-root}/{graph}/graph.md` (default `graphs-root
 
 `--slug` only affects a brand-new run (`mode: "new"`) — it's ignored on resume/redrive, since
 those reuse an existing run's already-established folder. When given, the new run folder is named
-`{slug}_{graph}_{timestamp}` instead of the bare `{graph}_{timestamp}`; `slug` is sanitized the
+`{timestamp}_{slug}` instead of the bare `{timestamp}_{graph}`; `slug` is sanitized the
 same way `graph` is (non-alphanumeric runs collapsed to a single `-`, leading/trailing `-`
-trimmed). Pass a short identifier for what this run is actually about (e.g. the feature/idea slug
+trimmed). The timestamp prefix keeps `runs/` sorted chronologically by default directory listing.
+Pass a short identifier for what this run is actually about (e.g. the feature/idea slug
 the run's input concerns) so a `runs/` directory with several runs stays scannable — see
 GRAPH-SPEC.md's file layout section for the full naming convention.
 
