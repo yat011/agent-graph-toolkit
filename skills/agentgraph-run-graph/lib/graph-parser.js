@@ -9,7 +9,7 @@ class GraphParseError extends Error {
 }
 
 function seqOf(nodeId) {
-  const m = /^(\d+)_/.exec(nodeId);
+  const m = /^(\d+)[A-Za-z]?_/.exec(nodeId);
   return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
@@ -90,7 +90,7 @@ function parseGraph(graphPath) {
   }
 
   const nodes = [];
-  const sectionRe = /^## (\d+_\S*)\s*$/gm;
+  const sectionRe = /^## (\d+[A-Za-z]?_\S*)\s*$/gm;
   const matches = [];
   let m;
   while ((m = sectionRe.exec(raw)) !== null) {

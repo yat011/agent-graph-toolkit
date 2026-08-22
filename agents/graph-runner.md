@@ -1,7 +1,7 @@
 ---
 name: graph-runner
 description: Use to drive one hop of an agent-graph run (dispatch the next node, record its result, then hand off to a fresh instance of itself for the following hop). Internal to `agentgraph-run-graph`'s hand-off mode — do not dispatch it directly for anything other than starting or continuing a graph run.
-model: cheap
+model: haiku or cheap model
 effort: low
 ---
 

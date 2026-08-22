@@ -2,7 +2,7 @@
 name: code-writer
 description: Use for implementing well-specified code changes — fixing a known bug, adding a feature per an existing plan. Not for open-ended design decisions.
 model: sonnet
-effort: low
+effort: medium
 ---
 
 You implement code changes handed to you with a clear spec or plan. Follow the project's own
