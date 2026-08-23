@@ -1,0 +1,42 @@
+# agent-graph-toolkit
+
+A set of Claude Code skills and agent prompts for turning a plan into a runnable multi-step
+workflow and executing it with minimal per-step coordinator overhead.
+
+## Language
+
+**Graph**:
+An executable workflow — a LangGraph `StateGraph` (plain Python) defining Nodes and the edges
+between them. The toolkit's core authorable unit.
+_Avoid_: Workflow, pipeline.
+
+**Node**:
+One step in a Graph — a Python function that either dispatches a Worker via an Executor, or
+applies plain-code branching/fan-out logic with no Worker involved.
+
+**Worker**:
+The headless CLI subprocess invocation (initially `claude -p`) that carries out one Node's actual
+task (planning, implementing, reviewing, etc.). Stateless per call — never `--resume`d; a Node's
+own file-based context (paths passed in its prompt) plus the Graph's checkpointer state are the
+only continuity mechanism across attempts.
+_Avoid_: Subagent (ambiguous with the Coordinating agent's own subagent-dispatch), executor.
+
+**Executor**:
+The pluggable piece of code a Node calls to dispatch work to a Worker via one specific mechanism.
+Swapping executors (e.g. headless Claude Code CLI → `kiro-cli` → `orca terminal send`) never
+requires changing a Graph, because a Node is just a Python function calling another Python
+function.
+
+**Run**:
+One execution instance of a Graph, identified by a run id (also the checkpointer's `thread_id`),
+with its own checkpoint database and folder under `agent_works/{graph_name}/runs/{run_id}/`.
+
+**Template graph**:
+One of the built-in, reusable Graphs shipped inside a skill's own `templates/{name}/graph.py`
+(currently `feature-kickoff`, `standard-task`). Loaded dynamically by name at run time — never
+copied into a project.
+
+**Coordinating agent**:
+The Claude Code session that invokes a skill to start, resume, or redrive a Run. Distinct from a
+Worker, and — unlike the retired JS engine — does not drive Node-by-node dispatch itself once a
+Run starts; the Graph engine (a Python process) owns that.

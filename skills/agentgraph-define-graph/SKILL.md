@@ -1,23 +1,27 @@
 ---
 name: agentgraph-define-graph
-description: Use when the user wants to turn a written plan into an executable agent graph for review — e.g. "define a graph for this plan", "turn this plan into a graph", "break this plan into nodes". Reads a plan file, breaks it into nodes, writes agent_works/graphs/{graph-name}/graph.md, and iterates with the user until they confirm it. Does not execute the graph — that's a separate skill.
+description: Use when the user wants to turn a written plan into an executable agent graph for review — e.g. "define a graph for this plan", "turn this plan into a graph", "break this plan into nodes". Reads a plan file, breaks it into nodes, writes agent_works/graphs/{graph-name}/graph.py, and iterates with the user until they confirm it. Does not execute the graph — that's a separate skill.
 ---
 
 # agentgraph-define-graph
 
-Turns a written plan (`agent_works/plans/*.md`) into an `agent_works/graphs/{graph-name}/graph.md`
-file per the shared spec, and iterates with the user on the design until they confirm it.
+Turns a written plan (`agent_works/plans/*.md`) into an `agent_works/graphs/{graph-name}/graph.py`
+file — plain, idiomatic LangGraph `StateGraph` Python code, never a hand-rolled builder DSL and
+never a markdown/YAML format — and iterates with the user on the design until they confirm it.
 
-**This skill only writes `graph.md`. It never calls `agentgraph-run-graph`, never dispatches an `Agent` tool
-call, and never executes any node.** Defining a graph and running a graph are separate skills —
-running is out of scope here even if the user seems eager to proceed; hand off to the `agentgraph-run-graph`
-skill (or ask them to invoke it) once they confirm.
+**This skill only writes `graph.py`. It never calls `agentgraph-run-graph`, never invokes the
+`agentgraph` CLI to start a run, and never dispatches a Worker.** Defining a graph and running a
+graph are separate skills — running is out of scope here even if the user seems eager to proceed;
+hand off to the `agentgraph-run-graph` skill (or ask them to invoke it) once they confirm.
 
-Before doing anything else, read `GRAPH-SPEC.md` in this same skill directory
-(`.claude/skills/agentgraph-define-graph/GRAPH-SPEC.md`) in full. It is the single source of truth for the
-file layout and the `graph.md` schema (node types, `deps`, `retry`, `agent`, `ref`, `map_over`,
-`receipt`, `branches`, the ASCII diagram block, the worked example). Do not re-derive or duplicate that format from
-memory — follow it exactly as written there.
+Before doing anything else, read `CONTEXT.md` (repo root) for this toolkit's glossary (Graph,
+Node, Worker, Executor, Run, Template graph) and `agentgraph_engine/dispatch.py`'s module
+docstring for the exact `dispatch_worker`/`dispatch_with_retry` signatures this skill's generated
+code must call — do not re-derive or duplicate either from memory. Reading the two shipped
+templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-task}/graph.py`) is
+the fastest way to see the idiom this skill must reproduce: a `TypedDict` state, one node function
+per unit of work, a router function per branching node, `build_graph(checkpointer=None)` compiling
+and returning the graph.
 
 ## Steps
 
@@ -31,12 +35,17 @@ memory — follow it exactly as written there.
   (or point you at a different one) before continuing. Do not invent nodes not grounded in the
   plan's content.
 
-### 2. Choose the graph name
+### 2. Choose the graph name and location
 
 - Derive `{graph-name}` from the plan file's name (kebab-case, drop the extension and any
   redundant "plan" wording if it's already implied by context), e.g.
   `agent_works/plans/agent-graph-skills.md` → `agent-graph-skills`.
-- Check whether `agent_works/graphs/{graph-name}/graph.md` already exists:
+- The file goes at `agent_works/graphs/{graph-name}/graph.py` — a **project graph**
+  (`agentgraph_engine.graph_loader`'s term for a graph a project authored for one specific plan,
+  as opposed to the two built-in **template graphs** shipped inside
+  `skills/agentgraph-run-graph/templates/`). `agentgraph-run-graph`'s CLI resolves a project graph
+  by this same name/path automatically — no registration step.
+- Check whether `agent_works/graphs/{graph-name}/graph.py` already exists:
   - If it exists and the user is asking to redefine/update it, treat this as an edit to the
     existing graph (skip to step 5's loop directly).
   - If it exists and this looks like a fresh definition request for the same plan, ask the user
@@ -47,76 +56,139 @@ memory — follow it exactly as written there.
 Read the plan's structure (sections, task lists, "Tasks" headings, etc.) and design nodes that
 cover the work end to end. For each unit of work, decide:
 
-- **Node id and sequence** — `{seq}_{node-id}` (e.g. `01_planner`, `02_per_task_impl`), ordered
-  so `deps` only ever point backward.
-- **Node type** (per GRAPH-SPEC.md's node model):
-  - `leaf` — a single subagent call producing one `output.md`. Use this for any discrete, one-shot
-    piece of work (implement a thing, review a thing, write a doc). A leaf may set `receipt: true`
-    (engine synthesizes `output.md` and marks the node completed inside `next()` — no dispatch).
-    See GRAPH-SPEC.md's `receipt` field.
-  - `map` — use when the plan describes doing the *same kind* of work over a list of items whose
-    count/identity isn't known until an earlier node produces them (e.g. "implement each task
-    from the plan", "review each file in the list"). The map node must `map_over` a node that
-    writes `items.json`; write that source node's prompt to explicitly produce `items.json` as a
-    JSON array (never leave the list to be parsed out of prose).
-  - `subgraph` (`ref: {other-graph-name}`) — use when a chunk of the plan is itself substantial
-    enough to deserve its own graph (reusable, independently definable, or simply too large to
-    inline as one node). Only reference a graph that already exists or that you're defining as
-    part of this same session — don't invent a dangling `ref`. If the target graph's name isn't
-    knowable until runtime (e.g. a node earlier in this graph authors a fresh graph per run), use
-    `ref_from: {node-id}` instead of `ref` (see GRAPH-SPEC.md's dynamic subgraph convention) — the
-    node it points at must be in this same graph, and its prompt must be written to end
-    `output.md` with a `Graph: <graph-name>` line whenever it produces a runnable graph. Route
-    around a `ref_from` node via `branches` for any outcome where the graph-producing node
-    legitimately won't have produced one (rejected/blocked), rather than let it be reached bare.
-- **`deps`** — which earlier nodes' outputs this node needs before it can run.
-- **`agent`** — leave at the default (`general-purpose`) unless the plan or the nature of the work
-  clearly calls for a specialized subagent (e.g. a review-only node that must not write files
-  should get a read-only-oriented agent type).
-- **`retry`** — set `> 0` for nodes whose failure is more likely to be a transient/technical
-  glitch than a substantive problem; leave at 0 (default) otherwise. If a node's prompt causes
-  side effects that aren't safe to blindly repeat, phrase the prompt so it checks existing state
-  before acting (per GRAPH-SPEC.md's retry-idempotency convention), rather than skipping retry.
-- **`branches`** — add where the plan implies a decision point (e.g. "if review finds issues, fix
-  and re-review; if it passes, proceed"). Write plain-language `condition` strings in the order
-  they should be checked, each with a `next` node id, and an optional `default`. For every node
-  that declares `branches`, its prompt body must instruct the subagent to end `output.md` with a
-  single `Result: <short phrase>` line, per GRAPH-SPEC.md's result-line convention.
-- **Aggregation** — for any node that depends on a `map` node's fanned-out results, write that
-  explicitly into its prompt body (e.g. "read all files matching
-  `.../02_per_task_impl/attempt-1/item-*/attempt-*/output.md`") — GRAPH-SPEC.md has no separate
-  collector node type, so the reading instruction has to live in the downstream node's own prompt.
+- **Node name and state fields** — a Python identifier (e.g. `create_feature_branch`,
+  `tech_plan_reviewer`), plus which `TypedDict` state fields it reads and writes. Order nodes so
+  dependencies only ever point at fields an earlier node (in execution order) actually sets.
+- **Node kind** (all three compile down to plain `StateGraph` code — there is no DSL-level type
+  tag to set, this is a design vocabulary only):
+  - **Dispatch node** — a node function that calls
+    `agentgraph_engine.dispatch.dispatch_with_retry(retry=N, role=..., task_prompt=..., output_path=...)`
+    and returns a state update built from the result. Use for any discrete, one-shot piece of
+    Worker work (implement a thing, review a thing, write a doc). If `dispatch_with_retry`'s result
+    isn't `ok`, the node must return `{"halted": True, "halt_reason": "retries_exhausted",
+    "halted_at_node": "<this node's own name>"}` (the `halted_at_node` field is required —
+    `agentgraph`'s `redrive` command depends on it to find the right checkpoint to replay from).
+    A **receipt** node (the old engine's `receipt: true`) is a node function that writes its own
+    `output.md` directly (no dispatch) — see `standard-task/graph.py`'s `success` node.
+  - **Map/fan-out node** — a node function that loops **sequentially** (no concurrent dispatch,
+    per this migration's settled design) over a list already present in state (produced by an
+    earlier node), dispatching or recursing once per item. Honor an item's own `dependencies`
+    list (other item ids) the same way `feature-kickoff/graph.py`'s `run_tasks` does: skip an item
+    until every listed dependency has reached a success terminal; leave an item permanently
+    blocked (never dispatched) if a dependency is missing or itself ended at a non-success
+    terminal, rather than halting the whole map; halt with `halt_reason: "unmet_dependencies"`
+    only if nothing is ready and something is still waiting (a cycle).
+  - **Subgraph node** — a node function that loads another graph via
+    `agentgraph_engine.graph_loader.load_graph_module` + `get_build_graph` (a fixed path known at
+    authoring time — the dynamic-target case the old `ref_from` convention covered doesn't need a
+    special mechanism here: it's just choosing which path string to load at runtime, ordinary
+    Python) and calls `.invoke()` on the compiled result, folding its final state into this node's
+    own return value — reusable subgraph composition with no subfolder-per-composed-piece, just a
+    Python function call. A map node whose per-item work is
+    itself a full graph (the old "map-of-subgraphs") combines both: loop sequentially, invoke the
+    subgraph once per item — see `feature-kickoff/graph.py`'s `run_tasks`.
+- **Branches** — add a router function (`def route_after_x(state) -> str`) wherever the plan
+  implies a decision point. Every node a router reads from must have its dispatch prompt instruct
+  the subagent to end its output with a single-line `Result: <short phrase>` conclusion
+  (`agentgraph_engine.dispatch.extract_result_line` pulls this out of `output.md`, falling back to
+  the CLI's own chat text). **The router itself does plain `.startswith()`/equality checks against
+  the literal phrases you told the prompt to produce — never an LLM call, never a generic
+  string-similarity matcher.** Branch judgment is code, not an LLM decision. Wire the
+  router via `graph.add_conditional_edges(node_name, router_fn, {"branch_label": "target_node",
+  ...})`.
+- **Retries** (`dispatch_with_retry(retry=N, ...)`) — set `N > 0` for nodes whose failure is more
+  likely a transient/technical glitch than a substantive problem; `0` otherwise. This is
+  independent of a branch-driven loop-back (e.g. "review rejected, try again") — a loop-back needs
+  its own attempt counter in state (an int field incremented once per entry into the looped node),
+  checked by the router so the loop is self-bounding (see the "Loops must self-limit" convention
+  below). If a node's dispatch prompt causes side effects that aren't safe to blindly repeat,
+  phrase the prompt so it checks existing state before acting, per the retry-idempotency
+  convention below, rather than skipping retry.
+- **Aggregation** — a node that depends on a map node's fanned-out results reads them from state
+  directly (they're already in-process Python data, unlike the old file-based engine) — but if
+  that data needs to reach a **Worker's prompt**, pass a file path there, never paste the content
+  inline (the old "pass a path, never paste" convention still applies at the prompt boundary, even
+  though it no longer applies to in-process state).
 
-Keep the node prompts self-contained: each node's Markdown body is the entire prompt a subagent
-will receive, so it must state what to read, what to do, and what to write, without assuming any
-context beyond what's in `deps`/`map_over`/`ref` and its own body.
+Keep every dispatch node's `task_prompt` self-contained: it is the entire prompt a Worker will
+receive (combined with its `role`'s persona text and the output-path instruction by
+`dispatch_worker` itself — do not duplicate either of those inside `task_prompt`), so it must state
+what to read, what to do, and what to write, without assuming any context beyond what's in the
+graph's own state.
 
-### 4. Write graph.md
+### 4. Write graph.py
 
-Write `agent_works/graphs/{graph-name}/graph.md` following the schema in GRAPH-SPEC.md exactly:
+Write `agent_works/graphs/{graph-name}/graph.py` as plain LangGraph code:
 
-- Set `model:` on a node only when it's a mechanical/cheap task (e.g. a connectivity check) that
-  doesn't need its `agent` type's own default model — otherwise omit it and let the agent's default
-  apply. Make sure any loop-back `branches` condition is self-bounding (e.g. an attempt count), per
-  GRAPH-SPEC.md's "Loops must self-limit" convention — there is no global execution cap to fall
-  back on.
-- A fenced ASCII diagram block immediately after, rendering every node and edge (including branch
-  labels on conditional edges) as plain-text boxes/arrows, matching GRAPH-SPEC.md's worked
-  example format.
-- One `## {seq}_{node-id}` section per node, each with its ```yaml metadata block followed by the
-  node's prompt as plain Markdown body.
+- A `TypedDict(..., total=False)` state class covering every field any node reads or writes,
+  including `halted: bool`, `halt_reason: Optional[str]`, `halted_at_node: Optional[str]` if any
+  node can halt, and `outcome: Optional[str]` for the graph's own terminal result.
+- One node function per node (dispatch nodes call `agentgraph_engine.dispatch.dispatch_with_retry`
+  — never hand-roll a `subprocess` call), one router function per branching node.
+- `graph.add_node(...)` for every node (including a shared no-op `halted` node if any node can
+  halt, wired to `END`), `graph.add_edge`/`graph.add_conditional_edges` for every transition,
+  `graph.add_edge(START, ...)` for the entry node.
+- `def build_graph(checkpointer=None): ... return graph.compile(checkpointer=checkpointer)`, plus a
+  module-level `graph = build_graph()` for direct import in tests/tools that don't need a
+  checkpointer.
+- Make sure any loop-back router is self-bounding (an attempt-count check), per the "Loops must
+  self-limit" convention — there is no global execution cap to fall back on.
 
-The ASCII diagram must always be kept in sync with the node sections — if you add, remove, or
-rewire a node, regenerate the diagram in the same edit.
+### 5. Generate the review diagram — never hand-authored
 
-### 5. Confirm/redefine loop with the user
+Load and compile the graph you just wrote, then render it:
 
-- After writing (or updating) `graph.md`, show the user the rendered ASCII diagram (reproduce
-  the fenced block in your response) along with a short plain-language summary of the nodes and
-  what each does.
+```
+python -c "
+from agentgraph_engine.graph_loader import load_graph_module, get_build_graph
+m = load_graph_module('agent_works/graphs/{graph-name}/graph.py')
+print(get_build_graph(m)().get_graph().draw_ascii())
+"
+```
+
+(`draw_ascii()` needs the `grandalf` package — already an `agentgraph-engine` dependency; use
+`.draw_mermaid()` instead if an ASCII box diagram renders awkwardly for a particular shape, e.g. a
+graph with many branches). **Never hand-author or hand-maintain this diagram** — if you edit the
+graph, regenerate it from the compiled result again; the diagram is a read-out of the actual
+code, not a separate artifact to keep in sync by hand.
+
+If the load/compile step itself fails, that's a real bug in the `graph.py` you just wrote — fix it
+before showing anything to the user, don't paper over it with a description of what the diagram
+would look like.
+
+### 6. Confirm/redefine loop with the user
+
+- Show the user the rendered diagram (paste the actual `draw_ascii()`/`draw_mermaid()` output)
+  along with a short plain-language summary of the nodes and what each does.
 - Ask the user to confirm the graph or describe changes.
-- If they request changes, edit `graph.md` (nodes, deps, branches, prompts, and/or the ASCII
-  diagram together, keeping them in sync), then show the updated diagram and summary again.
+- If they request changes, edit `graph.py`, then regenerate and show the diagram again (step 5) —
+  never hand-edit the diagram text itself.
 - Repeat until the user explicitly confirms. Do not proceed to running the graph yourself at any
   point — once confirmed, tell the user the graph is ready and that running it is a separate step
   (the `agentgraph-run-graph` skill), and stop.
+
+## Conventions
+
+These carry over from the retired `graph.md` engine, translated to Python:
+
+- **Loops must self-limit.** Any router that can route back to an earlier node must check a
+  bounded attempt counter (a state int field incremented once per entry into the looped node) and
+  route to a non-looping terminal past a fixed cap — there is no global execution cap and no human
+  in the loop to interrupt a runaway graph.
+- **Result-line convention.** Every dispatch node a router reads from must have its prompt end
+  with a single-line `Result: <phrase>` conclusion; the router does plain string matching against
+  the literal phrases you told the prompt to produce.
+- **Retry-idempotency note.** `retry` re-runs a node's dispatch from scratch after technical
+  failure. If a node's prompt performs side effects that aren't safe to repeat, phrase the prompt
+  to check existing state before acting (e.g. "if X already exists, treat as done") rather than
+  assuming a clean slate.
+- **Sticky-research convention for loop-back retries.** A rejection-driven loop-back (e.g. a review
+  node routing back to the node it reviewed) is fixing specific flagged issues, not starting a
+  fresh investigation. Have the looped-back node's prompt read its own immediately preceding
+  attempt's output first (both templates' `_implement_prompt`/`_planner_prompt` helpers show the
+  pattern: glob the node's own prior `attempt-*/output.md` files) and scope fresh investigation to
+  exactly what the rejection requires re-checking.
+- **No `capability_gap` halt category.** A failing/erroring `claude` CLI dispatch is an ordinary
+  technical failure, subject to the node's own `retry` count, then `halt_reason:
+  "retries_exhausted"` — never a separate judgment call, because there's no coordinating LLM
+  positioned to make one per-dispatch anymore.

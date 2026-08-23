@@ -1,15 +1,24 @@
 # agent-graph-toolkit
 
-Turn a written plan into a Markdown graph, then run it. You invoke the skills; the host agent does the rest.
+Turn a written plan into a runnable LangGraph agent graph, then run it. You invoke the skills;
+a Python engine — not a coordinating LLM re-reading instructions at every step — drives execution.
 
 ## Key tech
 
-This is a set of `SKILL.md` files. No orchestration framework to install or configure.
+A small `uv`-managed Python package (`agentgraph_engine/`, requires Python >=3.13) plus a pair of
+`SKILL.md` files. Graphs are plain [LangGraph](https://github.com/langchain-ai/langgraph)
+`StateGraph` Python code — never a hand-authored markdown/YAML format, never LangGraph Platform
+(the paid hosted product).
 
-- `agentgraph-define-graph` — write a `graph.md` from a plan. It never runs anything.
-- `agentgraph-run-graph` — run a graph by name. It dispatches one subagent per node, follows branches, and can resume if a run stops.
+- `agentgraph-define-graph` — turns a plan into a `graph.py` (idiomatic LangGraph code, no custom
+  builder DSL). It never runs anything.
+- `agentgraph-run-graph` — starts/resumes/redrives a named graph via the `agentgraph` CLI. Each
+  Node is a Python function that either dispatches a Worker (a headless `claude -p` subprocess
+  call) or applies plain-code branching/fan-out logic.
 
-`GRAPH-SPEC.md` (next to define-graph) is the `graph.md` format, if you want to read or edit a graph by hand.
+`CONTEXT.md` is this toolkit's glossary (Graph, Node, Worker, Executor, Run, Template graph,
+Coordinating agent).
+`skills/agentgraph-run-graph/ENGINE-CLI.md` is the `agentgraph` CLI's command contract.
 
 ## Simple example
 
@@ -19,19 +28,21 @@ A grilled spec is already on disk. Ask the host:
 > run the feature-kickoff graph
 ```
 
-That loads `agentgraph-run-graph`. On first use it copies the `feature-kickoff` template into `agent_works/graphs/feature-kickoff/`, then walks:
+That loads `agentgraph-run-graph`, which starts `agentgraph_engine`'s compiled `feature-kickoff`
+template (loaded dynamically from `skills/agentgraph-run-graph/templates/feature-kickoff/graph.py`
+— never copied into a project) and walks:
 
 ```
-01_create_feature_branch ──► 02_planner ──► 03_tech_plan_reviewer
-                                             ├─[Approve]──────────────────────────► 04_load_tasks
-                                             ├─[Reject, attempted 3 times]────────► 07_blocked_plan_rejected
-                                             └─[Reject, attempted < 3 times]──────► 02_planner  (loop back)
+create_feature_branch -> planner -> tech_plan_reviewer
+                                     |-[Approve]--------------------------------> load_tasks
+                                     |-[Reject, attempted 3 times]--------------> blocked_plan_rejected
+                                     `-[Reject, attempted < 3 times]------------> planner  (loop back)
 
-04_load_tasks
- ├─[loaded, env working]─► 05_run_tasks (map: standard-task per task) ──► 06_final_review
- │                                                                                  ├─[passed]────────► 09_success
- │                                                                                  └─[issues found]──► 08_needs_manual_review
- └─[env down]──────────────────────────────────────────────────────────────────────────────────────► 08_needs_manual_review
+load_tasks
+ |-[loaded, env working]-> run_tasks (sequential map: standard-task per task) -> final_review
+ |                                                                                    |-[passed]--------------> success
+ |                                                                                    `-[issues found]--------> needs_manual_review
+ `-[env down]-------------------------------------------------------------------------------------------> needs_manual_review
 ```
 
 A custom graph is two skill invocations:
@@ -41,16 +52,24 @@ A custom graph is two skill invocations:
 > run the example-plan graph
 ```
 
-If a run stops, ask to redrive it after you fix the cause — do not start a fresh run unless you mean to abandon the old one.
+If a run halts, ask to redrive it after you fix the cause — do not start a fresh run unless you
+mean to abandon the old one.
 
 ## What's here
 
 ```
+agentgraph_engine/                    # the Python engine (uv-managed package)
+  dispatch.py                         # headless-CLI Worker dispatch + Result: line parsing
+  runs.py                             # run id / checkpoint path conventions (SqliteSaver)
+  graph_loader.py                     # importlib-based dynamic graph.py loading
+  cli.py                              # `agentgraph` start/resume/status/redrive
+  examples/hello_graph/               # minimal worked example (sequence, map, checker, 1 CLI dispatch)
 skills/
-  agentgraph-define-graph/              # plan → graph.md
-  agentgraph-run-graph/                 # run a graph.md
-    templates/feature-kickoff/          # spec → plan → per-task implement/review → suite
-    templates/standard-task/            # per-task subgraph used by feature-kickoff
+  agentgraph-define-graph/              # plan -> graph.py
+  agentgraph-run-graph/                 # run a graph.py via the `agentgraph` CLI
+    ENGINE-CLI.md                      # the `agentgraph` CLI's command contract
+    templates/feature-kickoff/graph.py  # spec -> plan -> per-task implement/review -> suite
+    templates/standard-task/graph.py    # per-task subgraph used by feature-kickoff
   agentgraph-vertical-slice-tasks/      # how to size a plan's tasks
   agentgraph-code-review-standards/     # Standards vs Spec review
   agentgraph-test-quality-bar/
@@ -61,18 +80,26 @@ agents/
   researcher.md
   code-writer.md
   reviewer.md
-  graph-runner.md           # drives one hand-off hop of a graph run, then re-dispatches itself
+tests/                       # pytest — dispatch, graph loading, both ported graphs, checkpoint resume
 ```
 
-Templates auto-copy into `agent_works/graphs/{name}/` on first run if no local `graph.md` exists. Swap the environment-check and test-suite steps for your project's tooling.
+Templates load dynamically by name via `agentgraph_engine.graph_loader` — never copied into a
+project's `agent_works/`. Swap the environment-check and test-suite steps in your own graph for
+your project's tooling.
 
 ## Install
 
-Copy (or symlink) `skills/` and `agents/` into the host's skill and agent folders. Then talk to the host: `run the feature-kickoff graph`.
+```
+uv sync
+```
 
-Mechanical nodes pin `model: cheap`. The host maps that to its cheapest model.
+Copy (or symlink) `skills/`, `agents/`, and `agentgraph_engine/` into the host's project. Then
+talk to the host: `run the feature-kickoff graph`.
 
-Prefer [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) when connected. Missing is a warning in `INDEX.md`, not a stop.
+Mechanical nodes dispatch with `model="cheap"`, mapped to the CLI's cheapest available model.
+
+Prefer [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) when connected.
+Missing is a warning in `INDEX.md`, not a stop.
 
 ## License
 

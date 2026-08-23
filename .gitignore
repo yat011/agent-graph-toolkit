@@ -1,1 +1,4 @@
 agent_works/
+__pycache__/
+*.pyc
+.venv/

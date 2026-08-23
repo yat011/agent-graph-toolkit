@@ -1,138 +1,121 @@
 ---
 name: agentgraph-run-graph
-description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.md file produced by the agentgraph-define-graph skill) under agent_works/graphs/{graph-name}/ — walks the graph's nodes in dependency order, dispatching each as a subagent call, handling map/subgraph nodes, branching, retries, and resumable run-state.
+description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.py written by the agentgraph-define-graph skill, or one of the built-in feature-kickoff/standard-task templates) — starts/resumes/redrives it via the `agentgraph` CLI and reports its terminal state, without driving individual node dispatches yourself.
 ---
 
 # agentgraph-run-graph
 
-Executes a graph previously authored by the `agentgraph-define-graph` skill. All the mechanical
-bookkeeping — dependency ordering, resuming, retries, bypass/loop-back rules, map fan-out,
-subgraph recursion, `run-state.json` — is owned by `run-graph.js`, a dependency-free Node CLI
-shipped alongside this file. You (the main agent) are still the runtime for the two things a
-script cannot judge: actually making each subagent-dispatch call, and reading its output to judge
-which outcome occurred. See `CLI-CONTRACT.md` (or `node run-graph.js --help`) for exact command
-syntax — this file does not restate it.
+Executes a graph previously authored by the `agentgraph-define-graph` skill, or one of the two
+built-in template graphs (`feature-kickoff`, `standard-task`). All node-by-node mechanics —
+dependency ordering, retries, branch judgment, map fan-out, subgraph recursion, checkpointing —
+are owned by the compiled LangGraph `StateGraph` itself, driven by the `agentgraph` CLI
+(`agentgraph_engine/cli.py`; see `ENGINE-CLI.md` in this same directory for exact command syntax
+— this file does not restate it).
 
-For the `graph.md` schema, node types, and `runs/` folder layout, see
-`../agentgraph-define-graph/GRAPH-SPEC.md`.
+**This is a real architectural change from the retired `graph.md`/`run-graph.js` engine, not just
+a syntax change**, and it changes what you (the Coordinating agent) actually do:
+
+- The old engine's `agents/graph-runner.md` existed solely to solve a token-cost problem: a
+  coordinating LLM had to re-read instructions and make one `Agent`-tool dispatch call per node,
+  so a long graph run burned real tokens on "what do I do now" at every single hop, and hopping
+  the loop off to a fresh `graph-runner` copy per node was the mitigation. **That problem doesn't
+  exist anymore** — a Python interpreter (LangGraph) drives every node of a run inside one
+  `agentgraph start`/`resume`/`redrive` call, so `graph-runner.md` is retired outright, not
+  replaced by an equivalent. There is no hand-off chain to manage, no subagent-nesting-depth
+  ceiling to worry about, and no "small graph vs. big graph" cost tradeoff — one call handles a
+  9-node graph exactly as cheaply (in your own tokens) as a 2-node one.
+- **Dispatch and branch judgment both live in the graph's own Python code now**, not in you. A
+  node's router function does plain string-matching against a `Result:` line — never an LLM or
+  human judgment call. You are not the one deciding "does this `Result:` line mean
+  approve or reject"; the compiled graph already decided that before you see anything.
+- What's left for you, conceptually the same *kind* of job the old hand-off loop did (start
+  something, then read back what happened and decide the next mechanical step) but now at the
+  granularity of a whole Run's terminal state, not one node: call `agentgraph start` (or
+  `resume`/`redrive`), then interpret the **one** JSON object it prints back, and either report
+  done, ask the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
 
 ## Inputs
 
-- A graph name (required). If no local `graph.md` exists yet at
-  `agent_works/graphs/{graph-name}/graph.md` and the name matches one of this skill's own
-  `templates/{graph-name}/` (e.g. `feature-kickoff`, `standard-task`), it is auto-copied in on
-  first use — including for nested `subgraph`/`map` lookups reached mid-run, not just the
-  top-level graph — so no manual setup step is required for those. `next`'s response reports any
-  auto-copy via `copied_templates` (see `CLI-CONTRACT.md`). A graph name that matches neither an
-  existing local `graph.md` nor a template still fails with the usual "graph.md not found" error.
-- Optionally, "start fresh" / "new run" (pass `--fresh` to `resolve-run`).
-- Optionally, "redrive `{graph-name}`" to resume a *halted* run after fixing whatever caused it
-  (pass `--redrive`). A halted run is never auto-resumed without this explicit ask.
+- A graph name (required). Resolved via `agentgraph_engine.graph_loader.resolve_graph_path`: a
+  project graph at `agent_works/graphs/{graph-name}/graph.py` first (written by
+  `agentgraph-define-graph` for a specific plan), falling back to a built-in template at
+  `skills/agentgraph-run-graph/templates/{graph-name}/graph.py` (`feature-kickoff`,
+  `standard-task`) if no project graph exists by that name. **Neither is ever copied anywhere** —
+  both load in place via `importlib`, exactly where they already live.
+- Optionally, "start fresh" / "new run" — just call `agentgraph start` again; it always creates a
+  new `run_id`, never silently reuses an old one.
+- Optionally, "redrive `{graph-name}`" to resume a **halted** run after fixing whatever caused it —
+  `agentgraph redrive --run {run_path}`. A halted run is never auto-resumed without this explicit
+  ask.
+- Optionally, "resume `{run_path}`" for a run **paused at an `interrupt()`** (a deliberate
+  checkpoint a graph author put in — distinct from a halt; see below) — `agentgraph resume --run
+  {run_path} [--resume-value {value}]`.
 
-## Hand-off mode (default for multi-node graphs)
+## Starting a run
 
-A long graph run driven inline, one session dispatching every node in sequence, accumulates that
-session's own transcript across every node — real token cost that buys nothing, since
-`run-state.json` is already the complete resumable source of truth after every node (see
-`GRAPH-SPEC.md`'s checkpoint convention). Prefer handing the loop itself off instead: dispatch the
-`graph-runner` agent to drive step 1 below (`resolve-run`) and the first `next`/dispatch, and let
-it hand off to a fresh copy of itself for every subsequent hop — see `agents/graph-runner.md` for
-exactly what each hop does. Domain node agents (`planner`, `code-writer`, `reviewer`, etc.) are
-unchanged either way; they never see the chain, only their own node's prompt.
+Derive a short kebab-case slug for what this run's input is actually about (e.g. the feature/idea
+slug, not the graph name — that's already implied by `--graph`), so a `runs/` directory stays
+identifiable once several runs accumulate. Then:
 
-This needs a host whose dispatch tool the `graph-runner` agent can call on itself — if the host has
-no subagent-dispatch capability at all, fall back to driving the loop below directly in this
-session instead. On Claude Code specifically, subagent-dispatch capability itself is capped by
-nesting depth (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, default 3) — see `agents/graph-runner.md`
-for what a hop must do when it discovers it has no dispatch tool available (confirmed by live
-testing, not hypothetical).
+```
+agentgraph start --graph {graph-name} [--slug {slug}] [--spec {path}] [--input-json {path}]
+```
 
-For a small graph (2-3 leaf nodes, no map/subgraph) the dispatch/hand-off overhead can cost more
-than it saves — driving the loop directly in this session is fine there.
+This one call drives the compiled graph through every node until it reaches `END`, halts, or pauses
+at an `interrupt()` — whichever comes first. It prints exactly one JSON object; read it, don't
+guess:
 
-## Loop (direct-session fallback, or what each `graph-runner` hop does internally)
+```json
+{"run_path": "...", "run_id": "...", "halted": false, "halt_reason": null, "outcome": "success"}
+```
 
-1. On a fresh run (not a resume/redrive), derive a short kebab-case slug for what this run's input
-   is actually about (e.g. the feature/idea slug, not the graph name — that's already implied by
-   `--graph`) and pass it as `--slug`, so the run folder stays identifiable when a `runs/`
-   directory accumulates several runs over time. Skip this on `--redrive` (irrelevant — an existing
-   run's folder is reused) and when the run has no natural single-subject slug (e.g. a batch run
-   over several unrelated inputs with no one topic).
-   Call `node run-graph.js resolve-run --graph {graph-name} [--redrive] [--fresh] [--slug {slug}]`.
-   - `{status:"blocked", reason:"halted_run_exists", ...}` — report the halt (node, reason) and
-     stop; tell the user to ask for a redrive (once fixed) or an explicit fresh start.
-   - `{status:"blocked", reason:"nothing_to_redrive"}` — report there's nothing halted for this
-     graph and stop.
-   - `{status:"ready", run_path, ...}` — proceed to the loop below with this `run_path`.
-2. Repeat:
-   - Call `node run-graph.js next --run {run_path}`.
-   - `{status:"complete"}` — report success and stop.
-   - `{status:"halted", halt_reason}` — report the halt and stop.
-   - `{status:"needs_branch", node_id}` — a prior session already recorded this node's result but
-     never recorded its branch judgment (e.g. interrupted mid-loop). Re-read that node's
-     `output.md` and call `record-branch` for it, then call `next` again.
-   - `{status:"dispatch", node_id, agent, model, prompt, output_path, has_branches, ...}` —
-     **before dispatching**, verify the declared `agent` (its tool list / permissions) can
-     actually do what `prompt` needs. This capability-gap judgment is yours alone, never the
-     script's: if there's a gap, do not substitute, narrow scope, or retry around it — call
-     `node run-graph.js record-halt --run {run_path} --node {node_id} --reason capability_gap
-     --detail "<what's missing>"`, report it to the user, and stop. If `dispatch.model` is
-     `cheap` or the legacy alias `haiku`, pass this host's cheapest available model — do not
-     halt. If `dispatch.model` is null/omitted and the prompt, invocation context, or the
-     matching `itemsSource` item has `kind: mechanical`, pass that same cheap model,
-     overriding the null. Do not invent an engine field for this. Then make exactly one
-     `Agent`-tool call with the given `agent`/`model`/`prompt`, and wait for it to finish.
-   - Read `output.md` at `output_path`.
-     - If the subagent crashed or `output.md` wasn't written, call `record-result --outcome
-       technical_failure` (add `--item {item}` if the dispatch had one).
-     - Otherwise call `record-result --outcome success` (`--item` likewise).
-     - If `has_branches` was true, match the `Result:` line first (do not open the rest of
-       `output.md` unless that line is missing or ambiguous). Judge which `branches` condition
-       (if any) matches, and call `record-branch --node {node_id} --match "<condition text>"`,
-       or `--default`, or `--none` if nothing matches and there's no default. This
-       branch-condition judgment is also yours alone; the script only applies the resulting
-       transition. Keep `record-branch` as today.
+## Interpreting the terminal result
+
+- **`outcome` set, `halted: false`, no `interrupted`** — the run reached a real terminal (e.g.
+  `success`, `blocked`, `manual_review` for `feature-kickoff`; `success`, `manual_flag` for
+  `standard-task`). Report it to the user in plain language (what `outcome` means for this
+  specific graph) and stop.
+- **`halted: true`** — a node exhausted its `retry` budget (`halt_reason: "retries_exhausted"`) or
+  a sequential map had items stuck on unresolved `dependencies` (`halt_reason:
+  "unmet_dependencies"` — a cycle; a permanently-blocked item, e.g. one whose dependency ended at
+  a non-success terminal, does **not** halt the whole map on its own). Report the reason and, if
+  useful, `agentgraph status --run {run_path}` to see the full state snapshot (including which
+  node halted). Do **not** auto-redrive. Ask the user to fix the underlying cause (a broken
+  environment, a genuinely-needed design decision, etc.), then call `agentgraph redrive --run
+  {run_path}` — this re-attempts only the failing node fresh, using the checkpoint history to
+  replay from exactly the point before it ran, never re-running anything upstream.
+- **`interrupted: true`** — the graph paused at an explicit `interrupt()` call the graph's author
+  deliberately placed (rare in `feature-kickoff`/`standard-task` today; real in
+  `agentgraph_engine/examples/hello_graph/`, which is what proves the mechanism —
+  `tests/test_checkpoint_resume.py`). `interrupt_value` carries whatever payload the node passed.
+  Decide (or ask the user for) the resume value the paused node needs, then call `agentgraph
+  resume --run {run_path} --resume-value {value}`. Nodes already completed before the pause are
+  **not** re-executed.
 
 ## Halting
 
-A run halts for exactly four reasons, recorded as `halt_reason`:
+Only two halt reasons exist now — no `capability_gap` (there's no coordinating LLM positioned to
+make a per-dispatch tool-gap judgment anymore, so a bad node/prompt pairing just surfaces as an
+ordinary technical failure, same path as any other):
 
-- `unresolved_branch` — a completed node's `branches` had no matching condition and no `default`.
-- `retries_exhausted` — a node (or map item) failed technically more times than its `retry` allows.
-- `capability_gap` — you judged the declared agent can't do what the node needs, or a dispatch was
-  blocked/rejected by a permission prompt. Never resolved by retrying, substituting, or narrowing
-  scope on your own judgment — only by the user fixing the graph, granting the permission, or
-  explicitly directing a specific path forward.
-- `unmet_dependencies` — a map had remaining items still waiting on unfinished `dependencies`
-  (typically a cycle) and nothing was in progress to unblock them. Permanently blocked items
-  (dep hit `05_manual_flag`, missing id) do **not** halt — the map completes so final review
-  can flag the missing `04_success`.
+- `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit, or the
+  Worker didn't write its required output file) more times than its `retry` count allows. See
+  `ENGINE-CLI.md`'s "Permission mode by model tier" section for how the dispatch's
+  `--permission-mode` is chosen.
+- `unmet_dependencies` — a sequential map (`feature-kickoff`'s `run_tasks`) had remaining items
+  stuck on unresolved `dependencies` with nothing ready to progress (a cycle).
 
-Re-invoking this skill on a halted graph does **not** resume it automatically — ask for a redrive
-(resets just the halted node and continues) or an explicit fresh start (abandons it for a new run).
+Re-invoking `agentgraph start` on a graph with a halted run does **not** resume it — start always
+creates a fresh run. Use `redrive` explicitly.
 
 ## Map items and cross-item dependencies
 
-- **A map item can reach a "needs help" terminal that isn't a halt** — e.g. a nested
-  `standard-task` run's `02_implement_requirements` routes to `05_manual_flag`. That is a
-  recorded terminal, not a `halted` run — `next()` keeps moving later items forward. There is
-  no CLI primitive to redrive one already-terminal map item back onto `04_success`. Record the
-  resolution in `agent_works/manual_actions/` (or the project's equivalent).
-- **The engine honors `itemsSource[].dependencies`.** `dispatchMap` will not start an item until
-  every listed id's corresponding map item is `completed` **and** reached a success terminal
-  (`04_success` for a nested `standard-task`; the item itself for a leaf map). If the next
-  array-order item is blocked, `next()` skips to the next *ready* item. In-progress items are
-  returned first — it never dispatches a blocked item. When every remaining item is permanently
-  blocked (dep hit `05_manual_flag`, missing id, finished without `04_success`), those items
-  stay pending and the map completes so `06_final_review` can flag the missing `04_success`.
-  A cycle (nothing ready or in-progress, some still waiting on unfinished deps) returns
-  `halted` / `unmet_dependencies`. Independent ready items may still be dispatched in parallel
-  via the host's parallel subagent API if you choose to fan out beyond one `next()` at a time.
-  After a nested `05_manual_flag`, blockers live in that node's `output.md` and
-  `agent_works/manual_actions/`. Do **not** create `agent_works/memory/` or `open-questions.md`.
-
-Implementers run **scoped** tests; the unfiltered suite is the final-review node (or one
-`full_suite: true` item, not both). Judge branches from
-the `Result:` line first. Do not paste prior `output.md` bodies into the next prompt — pass
-a path. Prefer `codebase-memory` when connected; if it is missing, write `CBM: missing`
-into `INDEX.md` as a warning and continue with targeted file reads. Do not stop the graph.
+A map/fan-out node (e.g. `05_run_tasks` inside `feature-kickoff`) dispatches sequentially — no
+concurrent dispatch, per this migration's settled design — and honors each item's own
+`dependencies` (other item ids): an item doesn't start until every listed dependency reached a
+success terminal; a permanently-blocked item (a missing dependency id, or one that itself ended at
+a non-success terminal like `standard-task`'s `manual_flag`) is left `blocked` rather than halting
+the whole map, so a later review node can still see and report the gap. Each item's own artifacts
+land under `{run_dir}/{map_node_name}/item-{n}/`, using the same `{node_name}/attempt-{n}/output.md`
+convention as every other node — inspect them directly if you need to see what a specific item's
+nested run actually did.
