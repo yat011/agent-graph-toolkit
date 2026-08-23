@@ -20,7 +20,7 @@ from agentgraph_engine.constants import (
     ROLE_GENERAL_PURPOSE,
     RUN_DIR_KEY,
 )
-from agentgraph_engine.dispatch import dispatch_with_retry
+from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
 from .state import HelloState
 
 GREET_NODE = "greet_node"
@@ -77,6 +77,7 @@ def dispatch_worker(state: HelloState) -> dict:
         output_path=output_path,
         model=MODEL_CHEAP,
     )
+    attach_usage(record, result)
     if not result.ok:
         record[OK_KEY] = False
         return {

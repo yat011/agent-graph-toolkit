@@ -25,11 +25,22 @@ from agentgraph_engine.constants import (
     OUTCOME_KEY,
     RUN_DIR_KEY,
     SPEC_PATH_KEY,
+    WORKER_CLI_CLAUDE,
+    WORKER_CLI_CURSOR,
+    WORKER_CLI_GROK,
+    WORKER_CLI_KEY,
 )
 from agentgraph_engine.graph_loader import GraphLoadError, get_build_graph, load_graph_module, resolve_graph_path
 from agentgraph_engine.runs import new_run_id, open_checkpointer, run_dir_for, thread_config
+from agentgraph_engine.worker_cli import WorkerCliError, resolve_worker_cli
+
+WORKER_CLI_CHOICES = (WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR)
 
 DEFAULT_AGENT_WORKS_ROOT = Path("agent_works")
+
+
+def _resolve_worker_cli_from_args(args: argparse.Namespace) -> str:
+    return resolve_worker_cli(cli_flag=getattr(args, "cli", None))
 
 
 def _load_build_graph(graph_name: str):
@@ -60,6 +71,7 @@ def _summarize(final_state: dict) -> dict:
 
 
 def cmd_start(args: argparse.Namespace) -> int:
+    worker_cli = _resolve_worker_cli_from_args(args)
     agent_works_root = Path(args.agent_works_root) if args.agent_works_root else DEFAULT_AGENT_WORKS_ROOT
     run_id = new_run_id(slug=args.slug, graph_name=args.graph)
     run_dir = run_dir_for(args.graph, run_id, agent_works_root)
@@ -70,6 +82,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         initial_state[SPEC_PATH_KEY] = args.spec
     if args.input_json:
         initial_state.update(json.loads(Path(args.input_json).read_text(encoding="utf-8")))
+    initial_state[WORKER_CLI_KEY] = worker_cli
 
     build_graph = _load_build_graph(args.graph)
     with open_checkpointer(args.graph, run_id, agent_works_root) as checkpointer:
@@ -80,6 +93,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
+    worker_cli = _resolve_worker_cli_from_args(args)
     run_path = Path(args.run).resolve()
     graph_name = _graph_name_from_path(run_path)
     run_id = _run_id_from_path(run_path)
@@ -89,6 +103,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     with open_checkpointer(graph_name, run_id, agent_works_root) as checkpointer:
         compiled = build_graph(checkpointer=checkpointer)
         config = {**thread_config(run_id), "recursion_limit": args.recursion_limit}
+        compiled.update_state(thread_config(run_id), {WORKER_CLI_KEY: worker_cli})
         resume_input = None
         if args.resume_value is not None:
             from langgraph.types import Command
@@ -155,6 +170,7 @@ def cmd_redrive(args: argparse.Namespace) -> int:
     record when it runs. An ordinary technical-failure halt (`halt_reason ==
     retries_exhausted`) is left as-is — no counters reset.
     """
+    worker_cli = _resolve_worker_cli_from_args(args)
     run_path = Path(args.run).resolve()
     graph_name = _graph_name_from_path(run_path)
     run_id = _run_id_from_path(run_path)
@@ -182,7 +198,12 @@ def cmd_redrive(args: argparse.Namespace) -> int:
             print(json.dumps({"status": "error", "error": f"no checkpoint found before node '{node_id}'"}))
             return 1
 
-        updates = {HALTED_KEY: False, HALT_REASON_KEY: None, HALTED_AT_NODE_KEY: None}
+        updates = {
+            HALTED_KEY: False,
+            HALT_REASON_KEY: None,
+            HALTED_AT_NODE_KEY: None,
+            WORKER_CLI_KEY: worker_cli,
+        }
         if current.values.get(HALT_REASON_KEY) in GATE_HALT_REASONS:
             updates.update(_reset_nested_attempt_records(target.values))
         compiled.update_state(target.config, updates)
@@ -202,12 +223,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_start.add_argument("--input-json", default=None, help="Path to a JSON file merged into the initial state.")
     p_start.add_argument("--agent-works-root", default=None)
     p_start.add_argument("--recursion-limit", type=int, default=200)
+    _add_cli_flag(p_start)
     p_start.set_defaults(func=cmd_start)
 
     p_resume = sub.add_parser("resume", help="Resume a Run from its checkpoint (e.g. after an interrupt()).")
     p_resume.add_argument("--run", required=True, help="Path to the run folder (agent_works/{graph}/runs/{run_id}).")
     p_resume.add_argument("--resume-value", default=None, help="Value passed to Command(resume=...) if the run is paused at an interrupt().")
     p_resume.add_argument("--recursion-limit", type=int, default=200)
+    _add_cli_flag(p_resume)
     p_resume.set_defaults(func=cmd_resume)
 
     p_status = sub.add_parser("status", help="Print a Run's current checkpointed state.")
@@ -217,9 +240,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_redrive = sub.add_parser("redrive", help="Re-attempt a halted Run's failing node fresh.")
     p_redrive.add_argument("--run", required=True)
     p_redrive.add_argument("--recursion-limit", type=int, default=200)
+    _add_cli_flag(p_redrive)
     p_redrive.set_defaults(func=cmd_redrive)
 
     return parser
+
+
+def _add_cli_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--cli",
+        choices=WORKER_CLI_CHOICES,
+        default=None,
+        help=(
+            "Worker CLI for this process (claude, grok, or cursor). "
+            "Overrides ~/.agents/agentgraph.json. Default: claude."
+        ),
+    )
 
 
 def main(argv=None) -> int:
@@ -227,7 +263,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (GraphLoadError, FileNotFoundError) as exc:
+    except (GraphLoadError, FileNotFoundError, WorkerCliError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1
 

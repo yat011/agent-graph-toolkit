@@ -45,7 +45,7 @@ from agentgraph_engine.constants import (
     SUCCESS_NODE,
     TECH_PLAN_REVIEWER_NODE,
 )
-from agentgraph_engine.dispatch import dispatch_with_retry
+from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 from agentgraph_engine.routing import classify_gate
 from agentgraph_engine.runs import node_output_path
@@ -103,6 +103,7 @@ def create_feature_branch(state: FeatureKickoffState) -> dict:
         output_path=output_path,
         model=MODEL_CHEAP,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             CREATE_FEATURE_BRANCH_NODE: record,
@@ -144,6 +145,7 @@ def planner(state: FeatureKickoffState) -> dict:
         task_prompt=_planner_prompt(state, run_dir, attempt),
         output_path=output_path,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             PLANNER_NODE: record,
@@ -178,6 +180,7 @@ def tech_plan_reviewer(state: FeatureKickoffState) -> dict:
         task_prompt=_tech_review_prompt(state),
         output_path=output_path,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             TECH_PLAN_REVIEWER_NODE: record,
@@ -225,6 +228,7 @@ def load_tasks(state: FeatureKickoffState) -> dict:
         output_path=output_path,
         model=MODEL_CHEAP,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             LOAD_TASKS_NODE: record,
@@ -364,6 +368,7 @@ def final_review(state: FeatureKickoffState) -> dict:
         output_path=output_path,
         model=MODEL_CHEAP,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             FINAL_REVIEW_NODE: record,

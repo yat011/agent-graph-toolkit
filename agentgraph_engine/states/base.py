@@ -9,6 +9,7 @@ class BasicNodeState(TypedDict, total=False):
     attempt_count: int  # times THIS node has executed (first run, loop-back re-entry, or a peer's reject landing here)
     result_line: Optional[str]
     output_path: Optional[str]
+    usage: Optional[dict]
 
 
 class GateNodeState(BasicNodeState, total=False):
@@ -22,3 +23,4 @@ class BaseGraphState(TypedDict, total=False):
     halt_reason: Optional[str]
     halted_at_node: Optional[str]
     outcome: Optional[str]
+    worker_cli: Optional[str]

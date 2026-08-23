@@ -34,7 +34,7 @@ from agentgraph_engine.constants import (
     STANDARD_TASK_MANUAL_FLAG_DIR,
     STANDARD_TASK_SUCCESS_DIR,
 )
-from agentgraph_engine.dispatch import dispatch_with_retry
+from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
 from agentgraph_engine.routing import classify_gate
 from agentgraph_engine.runs import node_output_path
 from agentgraph_engine.states.standard_task import StandardTaskState
@@ -134,6 +134,7 @@ def implement_requirements(state: StandardTaskState) -> dict:
         task_prompt=_implement_prompt(state, attempt, run_dir),
         output_path=output_path,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             IMPLEMENT_REQUIREMENTS_NODE: record,
@@ -158,6 +159,7 @@ def review(state: StandardTaskState) -> dict:
         task_prompt=_review_prompt(run_dir),
         output_path=output_path,
     )
+    attach_usage(record, result)
     if not result.ok:
         return {
             REVIEW_NODE: record,

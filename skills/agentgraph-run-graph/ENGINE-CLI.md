@@ -11,9 +11,28 @@ Every command prints exactly one JSON object to stdout. No provider API key is r
 forwarded anywhere in this CLI, its underlying `agentgraph_engine` package, or the templates it
 loads (CONTEXT.md's "Executor").
 
+## Worker CLI
+
+`start`, `resume`, and `redrive` each resolve the vendor headless CLI **once per process**:
+
+1. `--cli claude|grok|cursor` on that command, if present
+2. else `worker_cli` in `~/.agents/agentgraph.json`, if present
+3. else `claude`
+
+The resolved value is kept in memory for every dispatch in that invoke. A later `resume` /
+`redrive` is a new process and resolves again; the checkpointed `worker_cli` is written so
+`status` can show it, not as an input to the next process's selection. `status` does not
+dispatch and does not take `--cli`.
+
+The settings file is optional (read if present; `start` does not create it):
+
+```json
+{ "worker_cli": "claude" }
+```
+
 ## Commands
 
-### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N]`
+### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N] [--cli claude|grok|cursor]`
 
 Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-task`, a project graph,
 or a user graph), loaded dynamically via `agentgraph_engine.graph_loader` (never copied into a
@@ -33,7 +52,7 @@ a graph that doesn't derive them itself).
 Output: `{"run_path": ..., "run_id": ..., "halted": bool, "halt_reason": str|null, "outcome":
 str|null, "interrupted"?: bool, "interrupt_value"?: [...]}`.
 
-### `agentgraph resume --run <run_path> [--resume-value <value>] [--recursion-limit N]`
+### `agentgraph resume --run <run_path> [--resume-value <value>] [--recursion-limit N] [--cli claude|grok|cursor]`
 
 Resumes a Run paused at a LangGraph `interrupt()` call (not a halt — see below), using the same
 `run_path`'s `checkpoints.sqlite`. `--resume-value` becomes the interrupted node's `interrupt()`
@@ -47,7 +66,7 @@ Prints the Run's current checkpointed state: `{"run_path": ..., "next": [...], "
 `next` is the node(s) LangGraph would run on the next `invoke`/`resume` call (empty if the Run
 reached `END`).
 
-### `agentgraph redrive --run <run_path> [--recursion-limit N]`
+### `agentgraph redrive --run <run_path> [--recursion-limit N] [--cli claude|grok|cursor]`
 
 Re-attempts a **halted** Run's failing node fresh, without re-running anything upstream of it.
 Every halting node records its own node name as `halted_at_node` in state; `redrive` walks the
@@ -89,12 +108,13 @@ extracted from the dispatched Worker's output (`agentgraph_engine.dispatch.extra
 
 ## Permission mode by model tier
 
-`--permission-mode auto` lets the model's own action-classifier judge each tool call, but that
-classifier requires Sonnet-tier and above. A dispatch resolved to the `haiku` model instead uses
-`--permission-mode acceptEdits --allowedTools Write` (no classifier needed; `Write` is the one
-tool this dispatch path's contract requires). `DispatchResult.ok` comes back `False` — an
-ordinary technical failure, retried/halted like any other — if a dispatch's permission mode still
-blocks the write it needs.
+On the Claude Worker CLI, `--permission-mode auto` lets the model's own action-classifier judge
+each tool call, but that classifier requires Sonnet-tier and above. A dispatch resolved to the
+`haiku` model instead uses `--permission-mode acceptEdits --allowedTools Write` (no classifier
+needed; `Write` is the one tool this dispatch path's contract requires). Grok uses
+`--permission-mode auto`; Cursor uses `--auto-review` (plus `--approve-mcps` and `--trust`, never
+`--force`). `DispatchResult.ok` comes back `False` — an ordinary technical failure, retried/halted
+like any other — if a dispatch's permission mode still blocks the write it needs.
 
 ## Map/fan-out and subgraph composition
 

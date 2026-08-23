@@ -15,6 +15,7 @@ from agentgraph_engine.constants import (
     OUTCOME_KEY,
     RESULT_KEY,
     RUN_DIR_KEY,
+    USAGE_KEY,
 )
 from agentgraph_engine.examples.hello_graph.nodes import (
     DISPATCH_WORKER_NODE,
@@ -69,6 +70,13 @@ def test_pauses_at_checkpoint_gate_then_resumes_to_pass(monkeypatch, tmp_path):
     assert r2[OUTCOME_KEY] == "pass"
     assert r2[FAN_OUT_NODE][RESULTS_KEY] == ["ALPHA", "BETA", "GAMMA"]
     assert r2[DISPATCH_WORKER_NODE][RESULT_KEY] == "greeted"
+    usage = r2[DISPATCH_WORKER_NODE][USAGE_KEY]
+    assert usage["worker_cli"] == "claude"
+    assert usage["model"] == "haiku"
+    written = json.loads(
+        (tmp_path / "dispatch_worker" / "attempt-1" / "usage.json").read_text(encoding="utf-8")
+    )
+    assert written == usage
 
 
 def test_worker_dispatch_failure_after_resume_routes_to_halted(monkeypatch, tmp_path):

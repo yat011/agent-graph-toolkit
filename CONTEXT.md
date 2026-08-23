@@ -15,17 +15,23 @@ One step in a Graph — a Python function that either dispatches a Worker via an
 applies plain-code branching/fan-out logic with no Worker involved.
 
 **Worker**:
-The headless CLI subprocess invocation (initially `claude -p`) that carries out one Node's actual
-task (planning, implementing, reviewing, etc.). Stateless per call — never `--resume`d; a Node's
-own file-based context (paths passed in its prompt) plus the Graph's checkpointer state are the
-only continuity mechanism across attempts.
+The headless CLI subprocess invocation that carries out one Node's actual task (planning,
+implementing, reviewing, etc.). Stateless per call — never `--resume`d; a Node's own file-based
+context (paths passed in its prompt) plus the Graph's checkpointer state are the only continuity
+mechanism across attempts.
 _Avoid_: Subagent (ambiguous with the Coordinating agent's own subagent-dispatch), executor.
+
+**Worker CLI**:
+The vendor headless CLI a Run uses for every Worker dispatch: `claude`, `grok`, or `cursor`.
+Each engine process resolves it once as `--cli` > user setting > `claude`, then keeps that
+value in memory for every dispatch until the process exits. A later `resume`/`redrive` is a
+new process and resolves again. The checkpointed value is not an input to selection.
+_Avoid_: Adapter, Executor (Executor is the in-process subprocess seam, not the vendor).
 
 **Executor**:
 The pluggable piece of code a Node calls to dispatch work to a Worker via one specific mechanism.
-Swapping executors (e.g. headless Claude Code CLI → `kiro-cli` → `orca terminal send`) never
-requires changing a Graph, because a Node is just a Python function calling another Python
-function.
+Swapping executors (e.g. real subprocess → a test fake) never requires changing a Graph, because
+a Node is just a Python function calling another Python function.
 
 **Run**:
 One execution instance of a Graph, identified by a run id (also the checkpointer's `thread_id`),

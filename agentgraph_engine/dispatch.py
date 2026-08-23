@@ -1,16 +1,15 @@
 """Shared dispatch/executor module.
 
-Dispatches one Worker per call via a headless CLI (`claude -p --permission-mode auto
---output-format json` by default; Haiku dispatches use `acceptEdits --allowedTools Write`
-instead, since the `auto` action-classifier requires Sonnet-tier and above). Every dispatch is
-stateless: this module never passes `--resume`/`--continue`, and never tracks/reuses a
-`session_id` across calls — a Node's own file-based context (paths passed in its prompt) plus the
-Graph's checkpointer state are the only continuity mechanism across attempts.
+Dispatches one Worker per call via the process Worker CLI (Claude Code `claude`, Grok Build
+`grok`, or Cursor Agent `cursor-agent` — see `worker_cli.py`). Every dispatch is stateless:
+this module never passes `--resume`/`--continue`, and never tracks/reuses a `session_id`
+across calls — a Node's own file-based context (paths passed in its prompt) plus the Graph's
+checkpointer state are the only continuity mechanism across attempts.
 
 No provider API key is used or read anywhere in this module. The Executor (the `executor`
-callable) is the pluggable piece: swapping `claude -p` for `kiro-cli` or `orca terminal send`
-later is a new `executor`/`cli` value, never a change to this function's signature or to any
-Node/Graph that calls it.
+callable) is the pluggable in-process seam: swapping the real subprocess for a test fake
+never requires changing a Node/Graph. The vendor binary is selected by `current_worker_cli()`,
+not by a `cli=` argument on this function or on any node.
 
 A failing/erroring CLI call is an ordinary technical failure, surfaced via
 `DispatchResult.ok is False`, subject to each Node's own `retry` count via `dispatch_with_retry`.
@@ -26,29 +25,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from agentgraph_engine.constants import MODEL_CHEAP, ROLE_GENERAL_PURPOSE
+from agentgraph_engine.constants import ROLE_GENERAL_PURPOSE, USAGE_KEY
+from agentgraph_engine.worker_cli import (
+    build_usage,
+    current_worker_cli,
+    worker_cli_for,
+)
 
 RESULT_LINE_RE = re.compile(r"(?m)^Result:\s*(.+?)\s*$")
 
 # agents/{role}.md lives two levels up from this file (repo_root/agentgraph_engine/dispatch.py).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
-# `model: cheap` (and the legacy `haiku` alias) map to the CLI's cheapest model.
-MODEL_ALIASES = {MODEL_CHEAP: "haiku", "haiku": "haiku"}
+USAGE_FILENAME = "usage.json"
 
 # A role with no agents/{role}.md file (e.g. "general-purpose") gets no persona text prepended —
 # the task prompt is dispatched as-is.
 NO_PERSONA_ROLES = {ROLE_GENERAL_PURPOSE}
 
-
-def _permission_mode_args(resolved_model: Optional[str]) -> list:
-    """`auto` requires the Sonnet-tier-and-above action-classifier; Haiku doesn't support it and
-    denies every tool call in a headless context. Haiku dispatches use `acceptEdits` (no
-    classifier needed) plus an explicit `Write` allowlist, since that's the one tool this module's
-    contract actually requires (see module docstring)."""
-    if resolved_model == "haiku":
-        return ["--permission-mode", "acceptEdits", "--allowedTools", "Write"]
-    return ["--permission-mode", "auto"]
 
 Executor = Callable[[list, str, Optional[int]], subprocess.CompletedProcess]
 
@@ -65,6 +59,7 @@ class DispatchResult:
     exit_code: int
     stderr: str
     raw_envelope: dict = field(default_factory=dict)
+    usage: dict = field(default_factory=dict)
 
 
 def load_role_prompt(role: str) -> str:
@@ -93,10 +88,20 @@ def extract_result_line(text: Optional[str]) -> Optional[str]:
     return matches[-1].strip() if matches else None
 
 
+def attach_usage(record: dict, result: DispatchResult) -> None:
+    """Copy the per-dispatch usage object onto a nested node record."""
+    record[USAGE_KEY] = result.usage
+
+
 def _run_subprocess(argv: list, input_text: str, timeout: Optional[int]) -> subprocess.CompletedProcess:
     return subprocess.run(
         argv, input=input_text, capture_output=True, text=True, timeout=timeout, encoding="utf-8"
     )
+
+
+def _write_usage_json(output_path: Path, usage: dict) -> None:
+    usage_path = output_path.parent / USAGE_FILENAME
+    usage_path.write_text(json.dumps(usage), encoding="utf-8")
 
 
 def dispatch_worker(
@@ -105,7 +110,6 @@ def dispatch_worker(
     task_prompt: str,
     output_path: Path | str,
     model: Optional[str] = None,
-    cli: str = "claude",
     timeout: Optional[int] = 1800,
     executor: Optional[Executor] = None,
 ) -> DispatchResult:
@@ -124,7 +128,10 @@ def dispatch_worker(
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    resolved_model = MODEL_ALIASES.get(model, model) if model else None
+    identity = current_worker_cli()
+    vendor_cli = worker_cli_for(identity)
+    mapped_model = vendor_cli.resolve_model(model)
+
     persona = load_role_prompt(role)
     parts = []
     if persona:
@@ -138,19 +145,19 @@ def dispatch_worker(
     )
     combined_prompt = "\n\n---\n\n".join(parts) + "\n"
 
-    # Resolve via PATH/PATHEXT (shutil.which) rather than passing `cli` straight to subprocess:
-    # on Windows, `claude` is installed as a `claude.cmd`/`claude.CMD` shim, and CreateProcess
-    # (what subprocess uses with shell=False) will not find it from the bare name the way a
+    # Resolve via PATH/PATHEXT (shutil.which) rather than passing the binary name straight to
+    # subprocess: on Windows, CLIs are often installed as `.cmd` shims, and CreateProcess
+    # (what subprocess uses with shell=False) will not find them from the bare name the way a
     # shell's PATH lookup would. Falls back to the raw name if not found, so a genuinely missing
     # CLI still surfaces as an ordinary technical failure rather than a different kind of crash.
-    resolved_cli = shutil.which(cli) or cli
-    argv = [resolved_cli, "-p", *_permission_mode_args(resolved_model), "--output-format", "json"]
-    if resolved_model:
-        argv += ["--model", resolved_model]
+    resolved_binary = shutil.which(vendor_cli.binary) or vendor_cli.binary
+    argv = vendor_cli.argv(resolved_binary, mapped_model)
 
     try:
         proc = executor(argv, combined_prompt, timeout)
     except Exception as exc:  # subprocess couldn't start, timed out, etc. — technical failure
+        usage = build_usage(identity=identity, mapped_model=mapped_model, envelope={})
+        _write_usage_json(output_path, usage)
         return DispatchResult(
             ok=False,
             result_text=None,
@@ -161,21 +168,23 @@ def dispatch_worker(
             output_exists=output_path.exists(),
             exit_code=-1,
             stderr=str(exc),
+            usage=usage,
         )
 
     envelope: dict = {}
     result_text: Optional[str] = None
     session_id: Optional[str] = None
-    cost_usd: Optional[float] = None
     stdout = proc.stdout or ""
     if stdout.strip():
         try:
             envelope = json.loads(stdout)
             result_text = envelope.get("result")
             session_id = envelope.get("session_id")
-            cost_usd = envelope.get("total_cost_usd", envelope.get("cost_usd"))
         except json.JSONDecodeError:
             result_text = stdout
+
+    usage = build_usage(identity=identity, mapped_model=mapped_model, envelope=envelope)
+    _write_usage_json(output_path, usage)
 
     output_exists = output_path.exists()
     result_line = None
@@ -190,12 +199,13 @@ def dispatch_worker(
         result_text=result_text,
         result_line=result_line,
         session_id=session_id,
-        cost_usd=cost_usd,
+        cost_usd=usage.get("cost_usd"),
         output_path=output_path,
         output_exists=output_exists,
         exit_code=proc.returncode,
         stderr=proc.stderr or "",
         raw_envelope=envelope,
+        usage=usage,
     )
 
 

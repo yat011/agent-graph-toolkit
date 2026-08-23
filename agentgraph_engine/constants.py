@@ -41,6 +41,8 @@ ITEM_KEY = "item"
 ITEMS_KEY = "items"
 SPEC_PATH_KEY = "spec_path"
 MAP_TASK_STATES_KEY = "map_task_states"
+WORKER_CLI_KEY = "worker_cli"
+USAGE_KEY = "usage"
 
 # Mechanism vocabulary — fallback halt_reason when a gate record has no more specific reason.
 HALT_MANUAL_REVIEW_NEEDED = "manual_review_needed"
@@ -48,6 +50,13 @@ HALT_MANUAL_REVIEW_NEEDED = "manual_review_needed"
 # Mechanism vocabulary — dispatch role / model aliases used by more than one graph.
 ROLE_GENERAL_PURPOSE = "general-purpose"
 MODEL_CHEAP = "cheap"
+
+# Mechanism vocabulary — Worker CLI identities (vendor headless CLI for a process).
+WORKER_CLI_CLAUDE = "claude"
+WORKER_CLI_GROK = "grok"
+WORKER_CLI_CURSOR = "cursor"
+WORKER_CLI_IDENTITIES = frozenset({WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR})
+WORKER_CLI_CURSOR_BINARY = "cursor-agent"
 
 # On-disk attempt-folder names for a nested standard-task run.
 STANDARD_TASK_SUCCESS_DIR = "04_success"
