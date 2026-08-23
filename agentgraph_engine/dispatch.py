@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from agentgraph_engine import constants as constants_mod
 from agentgraph_engine.constants import ROLE_GENERAL_PURPOSE, USAGE_KEY
 from agentgraph_engine.worker_cli import (
     build_usage,
@@ -62,22 +63,99 @@ class DispatchResult:
     usage: dict = field(default_factory=dict)
 
 
+class RolePromptError(Exception):
+    """Named role is missing a non-empty agents/{role}.md prompt."""
+
+
+_ROLE_STRING_RE = re.compile(r"""role\s*=\s*(['"])(.*?)\1""")
+_ROLE_CONST_RE = re.compile(r"role\s*=\s*(ROLE_[A-Z0-9_]+)")
+_NESTED_GRAPH_RE = re.compile(
+    r"Path\(__file__\)(?:\.resolve\(\))?(?P<parents>(?:\.parent)+)\s*/\s*"
+    r"""['"](?P<dir>[^'"]+)['"]\s*/\s*['"]graph\.py['"]"""
+)
+
+
 def load_role_prompt(role: str) -> str:
     """Read agents/{role}.md (frontmatter stripped) for combining into a headless prompt.
 
-    `role` with no corresponding file (e.g. "general-purpose") returns "".
+    `general-purpose` (and other NO_PERSONA_ROLES) returns "" by design.
+    Any other named role raises RolePromptError if the file is missing or empty
+    after frontmatter strip.
     """
     if role in NO_PERSONA_ROLES:
         return ""
     path = AGENTS_DIR / f"{role}.md"
     if not path.exists():
-        return ""
-    text = path.read_text(encoding="utf-8")
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
+        raise RolePromptError(f"Missing role prompt for {role!r}: {path} does not exist")
+    body = path.read_text(encoding="utf-8")
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
         if end != -1:
-            text = text[end + 4 :]
-    return text.strip()
+            body = body[end + 4 :]
+    body = body.strip()
+    if not body:
+        raise RolePromptError(
+            f"Empty role prompt for {role!r}: {path} has no body after frontmatter"
+        )
+    return body
+
+
+def scan_roles_in_source(source: str) -> list[str]:
+    """Return role names referenced as role="..." / role='...' or role=ROLE_*."""
+    found: list[str] = []
+    for _quote, role in _ROLE_STRING_RE.findall(source):
+        found.append(role)
+    for const_name in _ROLE_CONST_RE.findall(source):
+        value = getattr(constants_mod, const_name, None)
+        if isinstance(value, str):
+            found.append(value)
+    return found
+
+
+def _nested_graph_paths(source_file: Path, source: str) -> list[Path]:
+    """Resolve Path(__file__).parent... / "<dir>" / "graph.py" literals next to source_file."""
+    found: list[Path] = []
+    for match in _NESTED_GRAPH_RE.finditer(source):
+        base = source_file
+        for _ in range(match.group("parents").count(".parent")):
+            base = base.parent
+        candidate = (base / match.group("dir") / "graph.py").resolve()
+        if candidate.exists():
+            found.append(candidate)
+    return found
+
+
+def required_roles_from_graph_path(graph_py: Path) -> list[str]:
+    """Named roles used by this graph, its sibling nodes.py, and nested graph.py paths it loads."""
+    pending = [graph_py.resolve()]
+    seen_graphs: set[Path] = set()
+    roles: list[str] = []
+    seen_roles: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current in seen_graphs:
+            continue
+        seen_graphs.add(current)
+        files = [current]
+        sibling = current.parent / "nodes.py"
+        if sibling.exists():
+            files.append(sibling)
+        for file_path in files:
+            source = file_path.read_text(encoding="utf-8")
+            for nested in _nested_graph_paths(file_path, source):
+                pending.append(nested)
+            for role in scan_roles_in_source(source):
+                if role in NO_PERSONA_ROLES or role in seen_roles:
+                    continue
+                seen_roles.add(role)
+                roles.append(role)
+    return roles
+
+
+def preflight_role_prompts(graph_py: Path) -> None:
+    """Raise RolePromptError if any named role used by the graph lacks a prompt file."""
+    for role in required_roles_from_graph_path(graph_py):
+        load_role_prompt(role)
 
 
 def extract_result_line(text: Optional[str]) -> Optional[str]:
@@ -125,6 +203,8 @@ def dispatch_worker(
     `ok=False` — an ordinary technical failure, same as a non-zero exit code.
     """
     executor = executor or _run_subprocess
+    persona = load_role_prompt(role)
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -132,7 +212,6 @@ def dispatch_worker(
     vendor_cli = worker_cli_for(identity)
     mapped_model = vendor_cli.resolve_model(model)
 
-    persona = load_role_prompt(role)
     parts = []
     if persona:
         parts.append(persona)

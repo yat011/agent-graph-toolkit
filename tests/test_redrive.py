@@ -25,7 +25,6 @@ from agentgraph_engine.constants import (
     RESULT_ACCEPT,
     RESULT_IMPLEMENTED,
     RESULT_REJECT,
-    RESULT_VERIFIED,
     REVIEW_NODE,
     RUN_DIR_KEY,
 )
@@ -150,7 +149,9 @@ def test_redrive_of_a_plain_technical_failure_does_not_reset_attempt_count(monke
 
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([(f"Result: {RESULT_VERIFIED}", True)]),
+        _script_executor(
+            [(f"Result: {RESULT_IMPLEMENTED}", True), (f"Result: {RESULT_ACCEPT}", True)]
+        ),
     )
     args = argparse.Namespace(run=str(run_dir), recursion_limit=50)
     exit_code = agentgraph_cli.cmd_redrive(args)

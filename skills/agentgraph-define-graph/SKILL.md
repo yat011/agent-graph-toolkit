@@ -117,11 +117,7 @@ cover the work end to end. For each unit of work, decide:
   inline (the old "pass a path, never paste" convention still applies at the prompt boundary, even
   though it no longer applies to in-process state).
 
-Keep every dispatch node's `task_prompt` self-contained: it is the entire prompt a Worker will
-receive (combined with its `role`'s persona text and the output-path instruction by
-`dispatch_worker` itself — do not duplicate either of those inside `task_prompt`), so it must state
-what to read, what to do, and what to write, without assuming any context beyond what's in the
-graph's own state.
+A dispatch node's `task_prompt` is a **work order** only: what to read, the `Result:` contract, and this-run context. Craft lives in `agents/{role}.md`. Do not restate the role prompt or the dispatch output-path instruction. Layout: static work order first, then append dynamic paths/payloads, then a retry appendix. Never use triple-quoted f-strings (`f"""` / `f'''`); use parenthesized implicit concatenation of ordinary strings / f-strings, one physical line per fragment. Do not tell authors to emit `kind` or `full_suite`. Named roles must have a non-empty `agents/{role}.md` (the CLI preflights this before invoke).
 
 ### 4. Write graph.py
 

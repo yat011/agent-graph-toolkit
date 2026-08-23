@@ -68,7 +68,6 @@ RESULT_REJECT = "rejected"
 RESULT_MANUAL = "manual"
 
 # Business vocabulary — implement_requirements Result: phrases (standard-task).
-RESULT_VERIFIED = "verified"
 RESULT_IMPLEMENTED = "implemented"
 RESULT_STOPPED = "stopped"
 

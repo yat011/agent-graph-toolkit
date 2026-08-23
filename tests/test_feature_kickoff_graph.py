@@ -29,7 +29,7 @@ from agentgraph_engine.constants import (
     RESULT_ACCEPT,
     RESULT_REJECT,
     RESULT_STOPPED,
-    RESULT_VERIFIED,
+    RESULT_IMPLEMENTED,
     RUN_DIR_KEY,
     STANDARD_TASK_SUCCESS_DIR,
     TECH_PLAN_REVIEWER_NODE,
@@ -222,8 +222,10 @@ def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(monkeyp
         (plan_line, True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"loaded 2 tasks\nResult: {RESULT_ACCEPT}", True),
-        (f"Result: {RESULT_VERIFIED}", True),
-        (f"Result: {RESULT_VERIFIED}", True),
+        (f"Result: {RESULT_IMPLEMENTED}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
+        (f"Result: {RESULT_IMPLEMENTED}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_ACCEPT}", True),
         ("Result: recap written", True),
     ]
@@ -286,8 +288,10 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
         (plan_line, True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"loaded 2 tasks\nResult: {RESULT_ACCEPT}", True),
-        (f"Result: {RESULT_VERIFIED}", True),
-        (f"Result: {RESULT_VERIFIED}", True),
+        (f"Result: {RESULT_IMPLEMENTED}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
+        (f"Result: {RESULT_IMPLEMENTED}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_ACCEPT}", True),
         ("Result: recap written", True),
     ]
@@ -296,7 +300,7 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
 
     def executor(argv, input_text, timeout):
         call_count["n"] += 1
-        if call_count["n"] == 6:
+        if call_count["n"] == 7:
             seen_a_done_before_b_dispatch["value"] = item_a_success_path.exists()
         content, ok = remaining.pop(0)
         _write_output(input_text, content)
@@ -307,3 +311,39 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
     result = graph.invoke({RUN_DIR_KEY: str(run_dir)}, config={"recursion_limit": 50})
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert seen_a_done_before_b_dispatch["value"] is True
+
+def test_final_review_prompt_is_scoped_not_unfiltered(monkeypatch, build_graph, tmp_path):
+    run_dir = tmp_path / "run"
+    tasks_json = _seed_plan_files(tmp_path, run_dir, [])
+    plan_line = f"agent_works/plans/demo.md\n{tasks_json}\nResult: plan written"
+    captured: list[str] = []
+    steps = [
+        ("branch ready\nResult: branch ready", True),
+        (plan_line, True),
+        (f"Result: {RESULT_ACCEPT}", True),
+        (f"loaded 0 tasks\nResult: {RESULT_ACCEPT}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
+        ("Result: recap written", True),
+    ]
+    remaining = list(steps)
+
+    def executor(argv, input_text, timeout):
+        captured.append(input_text)
+        content, ok = remaining.pop(0)
+        _write_output(input_text, content)
+        return subprocess.CompletedProcess(
+            argv, 0 if ok else 1, stdout=json.dumps({"result": content}), stderr=""
+        )
+
+    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
+    graph = build_graph()
+    result = graph.invoke({RUN_DIR_KEY: str(run_dir)}, config={"recursion_limit": 50})
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    final_text = next(t for t in captured if "Confirm nothing was skipped." in t)
+    assert "unfiltered test suite" not in final_text
+    assert "--name-only" in final_text or "name-only" in final_text
+    assert "directly import" in final_text
+    assert "test_scope" in final_text
+    assert not final_text.lstrip().startswith("- ")
+    assert final_text.index("Confirm nothing was skipped.") < final_text.index("Per-task outcomes")
+

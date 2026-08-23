@@ -26,7 +26,6 @@ from agentgraph_engine.constants import (
     RESULT_MANUAL,
     RESULT_REJECT,
     RESULT_STOPPED,
-    RESULT_VERIFIED,
     REVIEW_NODE,
     ROLE_GENERAL_PURPOSE,
     ROUTE_KEY,
@@ -71,31 +70,42 @@ def _prior_attempt_paths(run_dir: Path, node_id: str, before_attempt: int) -> li
 
 def _implement_prompt(state: StandardTaskState, attempt: int, run_dir: Path) -> str:
     item = state[ITEM_KEY]
-    prompt = f"""Implement the requirements for this task: {item.get('title', '')} — {item.get('description', '')}
-Test cases to cover (at minimum): {item.get('test_cases', [])}
-kind: {item.get('kind', 'implement')}
-test_scope: {item.get('test_scope', '')}
-full_suite: {item.get('full_suite', False)}
-dependencies: {item.get('dependencies', [])}
-
-No external search. Every codebase fact you rely on comes from reading files in this repo. If something is not in the repo, stop and end output.md with `Result: {RESULT_STOPPED} — <short reason>` rather than searching the web or spawning a researcher/explore subagent.
-
-Follow this project's own conventions (SOLID/DRY, no duplicate code, no defensive null checks, and whatever file/language scope restrictions it declares).
-
-You must build/compile and run this task's scoped tests before finishing — do not hand off untested code for review to discover failures in. Scope: test_scope above if set; otherwise only the tests for the files this task owns. Do not run the unfiltered project suite unless full_suite is true or kind is verify. Report the actual pass/fail counts from your own scoped run, never an unverified claim.
-
-Only stop short of green and say so explicitly if a failure genuinely requires a design decision beyond a mechanical fix, and only after you've actually run the scoped tests and root-caused it — never as a substitute for running them. If the build/test environment itself is unavailable, say so explicitly rather than treating it as an implementation gap.
-
-End output.md with a single-line `Result: {RESULT_VERIFIED}` when kind is verify (or full_suite is true and you changed no product files) — skips review, routes to success. End with `Result: {RESULT_IMPLEMENTED}` when kind is implement/default (or full_suite is true and you did change product files) — routes to review. Otherwise end with `Result: {RESULT_STOPPED} — <short reason>` so this routes straight to manual review.
-"""
+    prompt = (
+        "Implement the task.\n"
+        "\n"
+        "No external search / no researcher subagent — every codebase fact you rely on comes from "
+        "reading files in this repo. If something is not in the repo, stop and end output.md with "
+        f"`Result: {RESULT_STOPPED} — <short reason>` rather than searching the web or spawning a "
+        "researcher/explore subagent.\n"
+        "\n"
+        "Run scoped tests only (the files this task owns, or test_scope from the suffix if set). "
+        "Do not run the unfiltered project suite.\n"
+        "\n"
+        f"End output.md with a single-line `Result: {RESULT_IMPLEMENTED}` or "
+        f"`Result: {RESULT_STOPPED} — <short reason>`.\n"
+    )
+    prompt += (
+        "\n"
+        f"title: {item.get('title', '')}\n"
+        f"description: {item.get('description', '')}\n"
+        f"test_cases: {item.get('test_cases', [])}\n"
+        f"test_scope: {item.get('test_scope', '')}\n"
+        f"dependencies: {item.get('dependencies', [])}\n"
+    )
     prior_review = _prior_attempt_paths(run_dir, REVIEW_NODE_DIR, attempt)
     prior_self = _prior_attempt_paths(run_dir, IMPLEMENT_NODE_DIR, attempt)
     if prior_review or prior_self:
         latest_review = prior_review[-1] if prior_review else "(none found)"
         latest_self = prior_self[-1] if prior_self else "(none found)"
-        prompt += f"""
-This is a retry after a previously rejected review. Read the latest review output first: {latest_review}. Also read this same node's own immediately preceding attempt (sticky-research convention) — treat file paths, line numbers, and facts already established there as still valid unless the rejection specifically contradicts them: {latest_self}. Scope fresh investigation to exactly what the rejection's findings require re-checking.
-"""
+        prompt += (
+            "\nThis is a retry after a previously rejected review. "
+            f"Read the latest review output first: {latest_review}. "
+            "Also read this same node's own immediately preceding attempt "
+            "(sticky-research convention) — treat file paths, line numbers, and facts already "
+            f"established there as still valid unless the rejection specifically contradicts them: "
+            f"{latest_self}. Scope fresh investigation to exactly what the rejection's findings "
+            "require re-checking.\n"
+        )
     return prompt
 
 
@@ -106,21 +116,33 @@ def _review_prompt(run_dir: Path) -> str:
         attempts = sorted(node_dir.glob("attempt-*/output.md"))
         latest = attempts[-1] if attempts else None
     latest_display = latest if latest else "(not found)"
-    return f"""Read only: the `Result:` line of the latest 02_implement_requirements output.md in this run's folder ({latest_display}) — open the rest only if that line is missing or the verdict is unclear — plus `git status`/`git diff` of product files this task owns.
-
-Do not re-run tests — trust the implementer's counts unless the diff makes them implausible.
-
-Checklist (one short paragraph each): SOLID/DRY (reuse existing types, no duplicate framework); no new defensive null checks; diff matches the item requirements; off-limits files have zero diff; tests/miss-path only if the implement Result: line cites them.
-
-Accept or reject. End output.md with a single-line `Result: {RESULT_ACCEPT}` or `Result: {RESULT_REJECT} — <short reason>` conclusion — or, only if you judge this situation needs a human right now rather than another automatic attempt, `Result: {RESULT_MANUAL} — <reason>`.
-
-If and only if the result is {RESULT_ACCEPT}, stage and commit exactly the files `git status` currently shows as modified/untracked at that point, with commit message `<task-id>: <title>`.
-"""
+    prompt = (
+        "Read only the `Result:` line of the latest 02_implement_requirements output.md in this "
+        "run's folder — open the rest only if that line is missing or the verdict is unclear — "
+        "plus `git status`/`git diff` of product files this task owns.\n"
+        "\n"
+        f"Accept or reject. End output.md with a single-line `Result: {RESULT_ACCEPT}` or "
+        f"`Result: {RESULT_REJECT} — <short reason>` conclusion — or, only if you judge this "
+        "situation needs a human right now rather than another automatic attempt, "
+        f"`Result: {RESULT_MANUAL} — <reason>`.\n"
+        "\n"
+        f"If and only if the result is {RESULT_ACCEPT}, stage and commit exactly the files "
+        "`git status` currently shows as modified/untracked at that point, with commit message "
+        "`<task-id>: <title>`.\n"
+    )
+    prompt += f"\nImplement output.md: {latest_display}\n"
+    return prompt
 
 
 def _manual_flag_prompt() -> str:
-    return f"""This run needs manual attention. Read whichever of {IMPLEMENT_NODE_DIR}/attempt-*/output.md and {REVIEW_NODE_DIR}/attempt-*/output.md exist in this run's folder. Write output.md summarizing why the run couldn't complete automatically and what a human should check next. Also save this summary as a manual follow-up checklist under agent_works/manual_actions/, if this project uses that convention.
-"""
+    return (
+        "This run needs manual attention. Read whichever of "
+        f"{IMPLEMENT_NODE_DIR}/attempt-*/output.md and {REVIEW_NODE_DIR}/attempt-*/output.md "
+        "exist in this run's folder. Write output.md summarizing why the run couldn't complete "
+        "automatically and what a human should check next. Also save this summary as a manual "
+        "follow-up checklist under agent_works/manual_actions/, if this project uses that "
+        "convention.\n"
+    )
 
 
 def implement_requirements(state: StandardTaskState) -> dict:
@@ -177,8 +199,8 @@ def success(state: StandardTaskState) -> dict:
     output_path = node_output_path(run_dir, SUCCESS_NODE_DIR, 1)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        f"Synthesized receipt: requirements were implemented and passed review, or kind: verify / "
-        f"full_suite skipped review.\n\nResult: {OUTCOME_SUCCESS}\n",
+        f"Synthesized receipt: requirements were implemented and passed review.\n\n"
+        f"Result: {OUTCOME_SUCCESS}\n",
         encoding="utf-8",
     )
     return {OUTCOME_KEY: OUTCOME_SUCCESS}

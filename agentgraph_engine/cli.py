@@ -30,7 +30,9 @@ from agentgraph_engine.constants import (
     WORKER_CLI_GROK,
     WORKER_CLI_KEY,
 )
+from agentgraph_engine.dispatch import RolePromptError, preflight_role_prompts
 from agentgraph_engine.graph_loader import GraphLoadError, get_build_graph, load_graph_module, resolve_graph_path
+
 from agentgraph_engine.runs import new_run_id, open_checkpointer, run_dir_for, thread_config
 from agentgraph_engine.worker_cli import WorkerCliError, resolve_worker_cli
 
@@ -47,6 +49,10 @@ def _load_build_graph(graph_name: str):
     path = resolve_graph_path(graph_name)
     module = load_graph_module(path)
     return get_build_graph(module)
+
+
+def _preflight_graph(graph_name: str) -> None:
+    preflight_role_prompts(resolve_graph_path(graph_name))
 
 
 def _run_id_from_path(run_path: Path) -> str:
@@ -85,6 +91,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     initial_state[WORKER_CLI_KEY] = worker_cli
 
     build_graph = _load_build_graph(args.graph)
+    _preflight_graph(args.graph)
     with open_checkpointer(args.graph, run_id, agent_works_root) as checkpointer:
         compiled = build_graph(checkpointer=checkpointer)
         result = compiled.invoke(initial_state, config={**thread_config(run_id), "recursion_limit": args.recursion_limit})
@@ -100,6 +107,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     agent_works_root = run_path.parent.parent.parent
 
     build_graph = _load_build_graph(graph_name)
+    _preflight_graph(graph_name)
     with open_checkpointer(graph_name, run_id, agent_works_root) as checkpointer:
         compiled = build_graph(checkpointer=checkpointer)
         config = {**thread_config(run_id), "recursion_limit": args.recursion_limit}
@@ -177,6 +185,7 @@ def cmd_redrive(args: argparse.Namespace) -> int:
     agent_works_root = run_path.parent.parent.parent
 
     build_graph = _load_build_graph(graph_name)
+    _preflight_graph(graph_name)
     with open_checkpointer(graph_name, run_id, agent_works_root) as checkpointer:
         compiled = build_graph(checkpointer=checkpointer)
         config = thread_config(run_id)
@@ -263,7 +272,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (GraphLoadError, FileNotFoundError, WorkerCliError) as exc:
+    except (GraphLoadError, FileNotFoundError, WorkerCliError, RolePromptError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}))
         return 1
 

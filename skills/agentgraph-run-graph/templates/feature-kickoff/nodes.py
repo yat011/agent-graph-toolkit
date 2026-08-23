@@ -74,21 +74,29 @@ def _next_attempt(state: dict, node_id: str) -> int:
 
 
 def _branch_prompt(state: FeatureKickoffState) -> str:
-    spec_hint = (
-        f"Use this spec path: {state[SPEC_PATH_KEY]}"
-        if state.get(SPEC_PATH_KEY)
-        else "No spec path was given — read the most recently modified file under "
-        "agent_works/specs/. If none exists, do not guess: write output.md stating no spec was "
-        "found and stop."
+    prompt = (
+        "Derive a short kebab-case slug from the spec's subject/title.\n"
+        "\n"
+        "Check the current branch name and `git status` first, before running any git command "
+        "that changes state: if the current branch is already feature/{slug}, treat it as already "
+        "done. Otherwise check for uncommitted changes outside agent_works/ — if anything is "
+        "uncommitted there, do not touch it or switch branches; write output.md explaining the "
+        "working tree is dirty and stop. Otherwise, if a branch named feature/{slug} already "
+        "exists, check it out (no -b); only use `git checkout -b feature/{slug}` when that branch "
+        "doesn't exist yet. Never force anything, never touch remotes.\n"
+        "\n"
+        "Write output.md containing: the spec file path, the derived slug, and the branch name. "
+        "End with a single-line `Result: branch ready` conclusion.\n"
     )
-    return f"""{spec_hint}
-
-Derive a short kebab-case slug from the spec's subject/title.
-
-Check the current branch name and `git status` first, before running any git command that changes state: if the current branch is already feature/{{slug}}, treat it as already done. Otherwise check for uncommitted changes outside agent_works/ — if anything is uncommitted there, do not touch it or switch branches; write output.md explaining the working tree is dirty and stop. Otherwise, if a branch named feature/{{slug}} already exists, check it out (no -b); only use `git checkout -b feature/{{slug}}` when that branch doesn't exist yet. Never force anything, never touch remotes.
-
-Write output.md containing: the spec file path, the derived slug, and the branch name. End with a single-line `Result: branch ready` conclusion.
-"""
+    if state.get(SPEC_PATH_KEY):
+        prompt += f"\nUse this spec path: {state[SPEC_PATH_KEY]}\n"
+    else:
+        prompt += (
+            "\nNo spec path was given — read the most recently modified file under "
+            "agent_works/specs/. If none exists, do not guess: write output.md stating no spec "
+            "was found and stop.\n"
+        )
+    return prompt
 
 
 def create_feature_branch(state: FeatureKickoffState) -> dict:
@@ -116,21 +124,27 @@ def create_feature_branch(state: FeatureKickoffState) -> dict:
 
 
 def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> str:
-    prompt = f"""Produce a tech plan + task breakdown only — not a spec. The input spec named by 01_create_feature_branch's output.md is already approved ground truth: read it in full, but do not rewrite or re-derive it.
-
-Follow agentgraph-vertical-slice-tasks for task sizing (cut vertical, prefactor first, dependencies as blocking edges).
-
-Write the tech plan under agent_works/plans/{{feature-slug}}.md (starting with a `Spec: agent_works/specs/{{slug}}.md` line) and the same task list as machine-readable JSON at agent_works/plans/{{feature-slug}}.tasks.json` (id, title, description, test_cases, dependencies, and optional kind/test_scope/full_suite fields).
-
-End output.md with the plan file path and the tasks JSON file path, each on their own line, then a single-line `Result: plan written` conclusion.
-"""
-    reviewer_dir = run_dir / TECH_REVIEW_NODE_DIR
-    if attempt > 1 and reviewer_dir.exists():
-        attempts = sorted(reviewer_dir.glob("attempt-*/output.md"))
-        if attempts:
-            prompt += f"""
-A previous attempt was rejected — read its findings first: {attempts[-1]}. Revise the plan and task list to explicitly address every rejection reason (sticky-research convention: treat facts you already established as still valid unless the rejection specifically contradicts them).
-"""
+    prompt = (
+        "Write the tech plan under agent_works/plans/{feature-slug}.md "
+        "(starting with a `Spec: agent_works/specs/{slug}.md` line) and the same task list as "
+        "machine-readable JSON at agent_works/plans/{feature-slug}.tasks.json "
+        "(id, title, description, test_cases, dependencies, optional test_scope).\n"
+        "\n"
+        "End output.md with the plan file path and the tasks JSON file path, each on their own "
+        "line, then a single-line `Result: plan written` conclusion.\n"
+    )
+    if attempt > 1:
+        reviewer_dir = run_dir / TECH_REVIEW_NODE_DIR
+        if reviewer_dir.exists():
+            attempts = sorted(reviewer_dir.glob("attempt-*/output.md"))
+            if attempts:
+                prompt += (
+                    "\nA previous attempt was rejected — read its findings first: "
+                    f"{attempts[-1]}. Revise the plan and task list to explicitly address every "
+                    "rejection reason (sticky-research convention: treat facts you already "
+                    "established as still valid unless the rejection specifically contradicts "
+                    "them).\n"
+                )
     return prompt
 
 
@@ -158,13 +172,22 @@ def planner(state: FeatureKickoffState) -> dict:
 
 
 def _tech_review_prompt(state: FeatureKickoffState) -> str:
+    prompt = (
+        "Review the plan and tasks (not the spec's own decisions).\n"
+        "\n"
+        "End output.md with your standard `Verdict: accepted` / `Verdict: rejected — <reason>` "
+        "conclusion, then restate it as this graph's `Result:` line: exactly "
+        f"`Result: {RESULT_ACCEPT}`, `Result: {RESULT_REJECT} — <reason>`, or — only if you "
+        "judge this situation needs a human right now rather than another automatic attempt — "
+        f"`Result: {RESULT_MANUAL} — <reason>`.\n"
+    )
     plan_output_path = _record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY)
-    return f"""Read 02_planner's latest output.md ({plan_output_path}) for the plan file path and tasks JSON file path, then read both in full, plus the spec they reference.
-
-Scope this review to the plan and tasks, not the spec's own decisions. Follow agentgraph-vertical-slice-tasks when judging task size and sequencing.
-
-End output.md with your standard `Verdict: {RESULT_ACCEPT}` / `Verdict: {RESULT_REJECT} — <reason>` conclusion, then restate it as this graph's `Result:` line: exactly `Result: {RESULT_ACCEPT}`, `Result: {RESULT_REJECT} — <reason>`, or — only if you judge this situation needs a human right now rather than another automatic attempt — `Result: {RESULT_MANUAL} — <reason>`.
-"""
+    prompt += (
+        "\nRead 02_planner's latest output.md for the plan file path and tasks JSON file path, "
+        "then read both in full, plus the spec they reference.\n"
+        f"Planner output.md: {plan_output_path}\n"
+    )
+    return prompt
 
 
 def tech_plan_reviewer(state: FeatureKickoffState) -> dict:
@@ -205,13 +228,21 @@ def _parse_plan_output_paths(plan_output_path: Optional[str]) -> Optional[str]:
 
 
 def _load_tasks_prompt(state: FeatureKickoffState) -> str:
+    prompt = (
+        "Verify the project's build/test environment is working once, for the whole batch. "
+        "If it is not working, do not attempt to load the task list — end output.md with "
+        f"`Result: {RESULT_MANUAL} — environment not working` and stop.\n"
+        "\n"
+        "If working, read 02_planner's latest output.md for the tasks JSON file path, and read "
+        "that JSON file. Write the task list to items.json in this node's attempt folder as a "
+        "JSON array (copied verbatim).\n"
+        "\n"
+        "End output.md with a one-line summary of how many tasks were loaded, then a single-line "
+        f"`Result: {RESULT_ACCEPT}` conclusion.\n"
+    )
     plan_output_path = _record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY)
-    return f"""Verify the project's build/test environment is working once, for the whole batch. If it is not working, do not attempt to load the task list — end output.md with `Result: {RESULT_MANUAL} — environment not working` and stop.
-
-If working, read 02_planner's latest output.md ({plan_output_path}) for the tasks JSON file path, and read that JSON file. Write the task list to items.json in this node's attempt folder as a JSON array (copied verbatim).
-
-End output.md with a one-line summary of how many tasks were loaded, then a single-line `Result: {RESULT_ACCEPT}` conclusion.
-"""
+    prompt += f"\nPlanner output.md: {plan_output_path}\n"
+    return prompt
 
 
 def load_tasks(state: FeatureKickoffState) -> dict:
@@ -340,18 +371,30 @@ def run_tasks(state: FeatureKickoffState) -> dict:
 
 
 def _final_review_prompt(state: FeatureKickoffState) -> str:
+    prompt = (
+        "Confirm nothing was skipped. Do not re-read exact code diffs/hunks.\n"
+        "\n"
+        "Seed changed files as `git diff --name-only` vs merge-base with the repo default branch "
+        "(origin/HEAD or main), UNION every item's test_scope. Search for modules that **directly "
+        "import** those changed product files (rg/imports; prefer codebase-memory-mcp if connected, "
+        "missing is not a stop). Run the tests those importer files own PLUS the test_scope set. "
+        "Two-hop graph tests that only import a wrapper (e.g. test_feature_kickoff_graph importing "
+        "graph.py not the changed module) are OUT.\n"
+        "\n"
+        "End output.md with a per-task checklist, the test run summary, and a single-line "
+        f"`Result: {RESULT_ACCEPT}` or `Result: {RESULT_MANUAL} — <short reason>` conclusion.\n"
+    )
     child_states = state.get(MAP_TASK_STATES_KEY) or []
     checklist = "\n".join(
-        f"- {(child.get(ITEM_KEY) or {}).get('id')} ({(child.get(ITEM_KEY) or {}).get('title')}): {child.get(OUTCOME_KEY)}"
+        f"- {(child.get(ITEM_KEY) or {}).get('id')} "
+        f"({(child.get(ITEM_KEY) or {}).get('title')}): {child.get(OUTCOME_KEY)}"
         for child in child_states
     )
-    return f"""Confirm nothing was skipped, then run the unfiltered test suite (or reuse recorded unfiltered counts per this project's reuse convention).
-
-Per-task outcomes from 05_run_tasks:
-{checklist or "(no tasks)"}
-
-End output.md with a per-task checklist, the test run summary, and a single-line `Result: {RESULT_ACCEPT}` or `Result: {RESULT_MANUAL} — <short reason>` conclusion.
-"""
+    prompt += (
+        "\nPer-task outcomes from 05_run_tasks:\n"
+        f"{checklist or '(no tasks)'}\n"
+    )
+    return prompt
 
 
 def final_review(state: FeatureKickoffState) -> dict:
@@ -384,8 +427,13 @@ def final_review(state: FeatureKickoffState) -> dict:
 def blocked_plan_rejected(state: FeatureKickoffState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, BLOCKED_NODE_DIR, 1)
-    prompt = f"""The plan/task-list review loop exhausted 3 attempts without reaching approval. Read every 02_planner and 03_tech_plan_reviewer attempt's output.md in this run's folder. Write output.md summarizing the latest plan/tasks paths and the unresolved rejection reasons so a human can take over. End with `Result: {OUTCOME_BLOCKED}`.
-"""
+    prompt = (
+        "The plan/task-list review loop exhausted 3 attempts without reaching approval. "
+        "Read every 02_planner and 03_tech_plan_reviewer attempt's output.md in this run's "
+        "folder. Write output.md summarizing the latest plan/tasks paths and the unresolved "
+        "rejection reasons so a human can take over. "
+        f"End with `Result: {OUTCOME_BLOCKED}`.\n"
+    )
     result = dispatch_with_retry(
         retry=0, role=ROLE_GENERAL_PURPOSE, task_prompt=prompt, output_path=output_path, model=MODEL_CHEAP
     )
@@ -406,8 +454,12 @@ def blocked_plan_rejected(state: FeatureKickoffState) -> dict:
 def needs_manual_review(state: FeatureKickoffState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, MANUAL_REVIEW_NODE_DIR, 1)
-    prompt = f"""This run needs manual attention — reachable either from 04_load_tasks (environment down) or 06_final_review (issues found). Read whichever of those (and per-item outputs under 05_run_tasks) exist and write output.md summarizing why. End with `Result: manual review needed`.
-"""
+    prompt = (
+        "This run needs manual attention — reachable either from 04_load_tasks (environment "
+        "down) or 06_final_review (issues found). Read whichever of those (and per-item outputs "
+        "under 05_run_tasks) exist and write output.md summarizing why. "
+        "End with `Result: manual review needed`.\n"
+    )
     result = dispatch_with_retry(
         retry=0, role=ROLE_GENERAL_PURPOSE, task_prompt=prompt, output_path=output_path, model=MODEL_CHEAP
     )
@@ -423,17 +475,26 @@ def needs_manual_review(state: FeatureKickoffState) -> dict:
     else:
         redrive_node = LOAD_TASKS_NODE
         reason = _record(state, LOAD_TASKS_NODE).get(HALT_REASON_KEY, HALT_MANUAL_REVIEW_NEEDED)
-    return {OUTCOME_KEY: OUTCOME_MANUAL_REVIEW, HALTED_KEY: True, HALT_REASON_KEY: reason, HALTED_AT_NODE_KEY: redrive_node}
+    return {
+        OUTCOME_KEY: OUTCOME_MANUAL_REVIEW,
+        HALTED_KEY: True,
+        HALT_REASON_KEY: reason,
+        HALTED_AT_NODE_KEY: redrive_node,
+    }
 
 
 def success(state: FeatureKickoffState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, SUCCESS_NODE_DIR, 1)
-    prompt = f"""Write a Recap a human can read without opening the rest of the run: what shipped, the suite result, links to spec/plan/tasks JSON, and any follow-up docs. End with `Result: recap written`.
-"""
+    prompt = (
+        "Write a Recap a human can read without opening the rest of the run: what shipped, "
+        "the suite result, links to spec/plan/tasks JSON, and any follow-up docs. "
+        "End with `Result: recap written`.\n"
+    )
     result = dispatch_with_retry(
         retry=0, role=ROLE_GENERAL_PURPOSE, task_prompt=prompt, output_path=output_path, model=MODEL_CHEAP
     )
     if not result.ok:
         return {HALTED_KEY: True, HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED, HALTED_AT_NODE_KEY: SUCCESS_NODE}
     return {OUTCOME_KEY: OUTCOME_SUCCESS}
+

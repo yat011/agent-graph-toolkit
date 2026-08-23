@@ -46,3 +46,13 @@ copied into a project.
 The Claude Code session that invokes a skill to start, resume, or redrive a Run. Distinct from a
 Worker, and — unlike the retired JS engine — does not drive Node-by-node dispatch itself once a
 Run starts; the Graph engine (a Python process) owns that.
+
+**Role prompt**:
+The stable craft and identity of one Worker role. Prefixed onto every dispatch of that role, and
+also usable as a Claude Code agent. Distinct from the Coordinating agent.
+_Avoid_: Agent definition, persona, instruction, system prompt.
+
+**Work order**:
+The per-dispatch brief a Node gives a Worker: what to read, the `Result:` line that Node's router
+matches, and this-run context. Contains no role craft.
+_Avoid_: Instruction, node prompt.

@@ -38,7 +38,7 @@ Write the result to `agent_works/plans/{feature-slug}.md` (create the file and a
 
 Write the same Tasks section out as `agent_works/plans/{feature-slug}.tasks.json` — a JSON array
 of objects, one per task, each with `id`, `title`, `description`, `test_cases` (array of the
-task's listed test cases), and `dependencies` (array of other task ids, may be empty) fields. This
+task's listed test cases), `dependencies` (array of other task ids, may be empty), and optional `test_scope` fields. This
 file must mirror the plan's `## Tasks` section exactly — same tasks, same test cases, same
 dependencies, nothing dropped or invented — and must be kept in sync on every revision (including
 revisions made in response to reviewer feedback).

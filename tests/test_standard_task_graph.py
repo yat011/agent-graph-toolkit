@@ -28,7 +28,6 @@ from agentgraph_engine.constants import (
     RESULT_IMPLEMENTED,
     RESULT_REJECT,
     RESULT_STOPPED,
-    RESULT_VERIFIED,
     REVIEW_NODE,
     ROUTE_KEY,
     RUN_DIR_KEY,
@@ -65,11 +64,12 @@ def _script_executor(steps):
     graph's own node/router logic already fixes the chronological order of role dispatches, so
     no role-matching is needed here, just "the next thing that happens".
     """
-    calls = {"n": 0}
+    calls = {"n": 0, "inputs": []}
     remaining = list(steps)
 
     def executor(argv, input_text, timeout):
         calls["n"] += 1
+        calls["inputs"].append(input_text)
         if not remaining:
             raise AssertionError("executor called more times than scripted")
         content, ok = remaining.pop(0)
@@ -82,16 +82,52 @@ def _script_executor(steps):
     return executor, calls
 
 
-def test_verified_skips_review_and_reaches_success(monkeypatch, build_graph, tmp_path):
-    executor, calls = _script_executor([(f"Result: {RESULT_VERIFIED}", True)])
+def test_verified_result_does_not_skip_review(monkeypatch, build_graph, tmp_path):
+    """Result: verified is not a skip-review path; it routes to manual_flag."""
+    executor, calls = _script_executor(
+        [
+            ("Result: verified", True),
+            ("manual flag summary\nResult: flagged", True),
+        ]
+    )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
     result = graph.invoke(
-        {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d", "kind": "verify"}}
+        {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}}
     )
+    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_FLAG
+    assert REVIEW_NODE not in result or not (result.get(REVIEW_NODE) or {}).get(ATTEMPT_COUNT_KEY)
+
+
+def test_implemented_prompt_puts_item_fields_in_suffix(monkeypatch, build_graph, tmp_path):
+    executor, calls = _script_executor(
+        [
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            (f"Result: {RESULT_ACCEPT}", True),
+        ]
+    )
+    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
+
+    graph = build_graph()
+    item = {
+        "title": "UNIQUE_TITLE_XYZ",
+        "description": "UNIQUE_DESC_XYZ",
+        "test_cases": ["happy path"],
+        "test_scope": "tests/test_foo.py",
+        "dependencies": [],
+    }
+    result = graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEM_KEY: item})
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
-    assert calls["n"] == 1  # review never dispatched
+    implement_text = calls["inputs"][0]
+    assert "Implement the task." in implement_text
+    assert implement_text.index("Implement the task.") < implement_text.index("UNIQUE_TITLE_XYZ")
+    assert implement_text.index("Implement the task.") < implement_text.index("UNIQUE_DESC_XYZ")
+    lowered = implement_text.lower()
+    assert "full_suite" not in lowered
+    assert "kind: verify" not in lowered
+    assert "skips review" not in lowered
+    assert "result: verified" not in lowered
 
 
 def test_implemented_then_accepted_reaches_success(monkeypatch, build_graph, tmp_path):

@@ -18,11 +18,15 @@ from pathlib import Path
 import pytest
 
 from agentgraph_engine.dispatch import (
+    RolePromptError,
     dispatch_worker,
     dispatch_with_retry,
     extract_result_line,
     load_role_prompt,
+    preflight_role_prompts,
+    required_roles_from_graph_path,
 )
+from agentgraph_engine.graph_loader import TEMPLATES_ROOT
 from agentgraph_engine.worker_cli import UnknownGraphModelError, resolve_worker_cli
 
 
@@ -202,8 +206,60 @@ def test_load_role_prompt_general_purpose_has_no_persona():
     assert load_role_prompt(ROLE_GENERAL_PURPOSE) == ""
 
 
-def test_load_role_prompt_unknown_role_is_empty():
-    assert load_role_prompt("not-a-real-role-xyz") == ""
+def test_load_role_prompt_unknown_role_raises():
+    with pytest.raises(RolePromptError, match="Missing role prompt"):
+        load_role_prompt("not-a-real-role-xyz")
+
+
+def test_dispatch_worker_fails_before_subprocess_when_named_role_missing(tmp_path):
+    calls: list = []
+
+    def executor(argv, input_text, timeout):
+        calls.append(argv)
+        raise AssertionError("executor must not run when the role prompt cannot load")
+
+    with pytest.raises(RolePromptError):
+        dispatch_worker(
+            role="not-a-real-role-xyz",
+            task_prompt="x",
+            output_path=tmp_path / "out.md",
+            executor=executor,
+        )
+    assert calls == []
+
+
+def test_preflight_feature_kickoff_and_standard_task_pass_with_repo_agents():
+    preflight_role_prompts(TEMPLATES_ROOT / "feature-kickoff" / "graph.py")
+    preflight_role_prompts(TEMPLATES_ROOT / "standard-task" / "graph.py")
+
+
+def test_required_roles_skip_general_purpose_and_researcher_unless_dispatched():
+    standard = required_roles_from_graph_path(TEMPLATES_ROOT / "standard-task" / "graph.py")
+    assert "code-writer" in standard
+    assert "reviewer" in standard
+    assert "general-purpose" not in standard
+    kickoff = required_roles_from_graph_path(TEMPLATES_ROOT / "feature-kickoff" / "graph.py")
+    assert "planner" in kickoff
+    assert "tech-plan-reviewer" in kickoff
+    assert "code-writer" in kickoff
+    assert "reviewer" in kickoff
+    assert "researcher" not in kickoff
+    assert "general-purpose" not in kickoff
+
+
+def test_template_nodes_have_no_triple_quoted_fstrings():
+    for name in ("feature-kickoff", "standard-task"):
+        text = (TEMPLATES_ROOT / name / "nodes.py").read_text(encoding="utf-8")
+        assert 'f"""' not in text
+        assert "f'''" not in text
+
+
+def test_preflight_fails_when_agents_dir_is_empty(tmp_path, monkeypatch):
+    empty = tmp_path / "agents"
+    empty.mkdir()
+    monkeypatch.setattr("agentgraph_engine.dispatch.AGENTS_DIR", empty)
+    with pytest.raises(RolePromptError):
+        preflight_role_prompts(TEMPLATES_ROOT / "standard-task" / "graph.py")
 
 
 _CLAUDE_SONNET_TAIL = [

@@ -17,10 +17,4 @@ follow the `agentgraph-test-quality-bar` skill for what makes those tests worth 
 code has no test infrastructure to hook into, say so explicitly in your report rather than
 skipping tests silently.
 
-Build/compile and run the project's own test suite yourself before finishing — do not hand off
-untested code for `reviewer` to discover failures in. Do not write `output.md` until you've
-verified the change compiles and the relevant tests pass — report the actual pass/fail counts
-from your own run, never an unverified claim. Only stop short of green and say so explicitly if a
-failure genuinely requires a design decision beyond a mechanical fix (e.g. a production-code
-architecture change), and only after you've actually run the tests and root-caused it — never as
-a substitute for running them.
+Default craft: build/compile and run tests for the files this task owns, or the work order's test_scope if set. Report the actual pass/fail counts from that run. Do not hand off untested code for `reviewer` to discover failures in. Do not write `output.md` until you've run those tests. Only stop short of green and say so explicitly if a failure genuinely requires a design decision beyond a mechanical fix (e.g. a production-code architecture change), and only after you've actually run the tests and root-caused it — never as a substitute for running them.

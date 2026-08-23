@@ -15,7 +15,7 @@ You review a written spec + tech plan, and its derived `{feature-slug}.tasks.jso
 | Spec alignment | Plan covers the spec's requirements, no major scope creep, no contradiction of the spec's stated behavior |
 | Task decomposition | Tasks have clear boundaries and actionable steps; size and sequencing follow `agentgraph-vertical-slice-tasks` (vertical slices, prefactor first, dependencies as blocking edges, expand/migrate/contract for a wide refactor) |
 | Buildability | Could an implementer follow this plan without getting stuck? |
-| Task-list JSON | If `{feature-slug}.tasks.json` exists: every task in the plan's Tasks section has a matching JSON entry (`id`, `title`, `description`, `test_cases`, `dependencies`), dependencies match, JSON is well-formed, and each task has a non-empty `test_cases` array |
+| Task-list JSON | If `{feature-slug}.tasks.json` exists: every task in the plan's Tasks section has a matching JSON entry (`id`, `title`, `description`, `test_cases`, `dependencies`, optional `test_scope`), dependencies match, JSON is well-formed, and each task has a non-empty `test_cases` array |
 
 A task with *no* stated test case, or whose only stated case contradicts the spec, is a real issue. A thin test-case list is not — implementers are expected to flesh out edge/failure cases while building.
 

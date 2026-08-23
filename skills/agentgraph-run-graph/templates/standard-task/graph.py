@@ -4,9 +4,8 @@ Loaded dynamically via `agentgraph_engine.graph_loader` — never copied into a 
 `agent_works/` (CONTEXT.md's "Template graph").
 
     02_implement_requirements
-     |-[verified]---------------------------> 04_success (skip review)
      |-[implemented]-------------------------> 03_review
-     `-[stopped without completing]----------> 05_manual_flag
+     `-[stopped / anything else]-------------> 05_manual_flag
 
     03_review
      |-[accepted]-----------------------------> 04_success
@@ -31,7 +30,6 @@ from agentgraph_engine.constants import (
     MANUAL_FLAG_NODE,
     RESULT_IMPLEMENTED,
     RESULT_KEY,
-    RESULT_VERIFIED,
     REVIEW_NODE,
     SUCCESS_NODE,
 )
@@ -51,8 +49,6 @@ def route_after_implement(state: StandardTaskState) -> str:
     if state.get(HALTED_KEY):
         return HALTED_NODE
     line = ((state.get(IMPLEMENT_REQUIREMENTS_NODE) or {}).get(RESULT_KEY) or "").strip()
-    if line.startswith(RESULT_VERIFIED):
-        return SUCCESS_NODE
     if line.startswith(RESULT_IMPLEMENTED):
         return REVIEW_NODE
     return MANUAL_FLAG_NODE
@@ -83,7 +79,6 @@ def build_graph(checkpointer=None):
         IMPLEMENT_REQUIREMENTS_NODE,
         route_after_implement,
         {
-            SUCCESS_NODE: SUCCESS_NODE,
             REVIEW_NODE: REVIEW_NODE,
             MANUAL_FLAG_NODE: MANUAL_FLAG_NODE,
             HALTED_NODE: HALTED_NODE,
