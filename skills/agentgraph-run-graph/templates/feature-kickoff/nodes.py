@@ -118,7 +118,7 @@ def create_feature_branch(state: FeatureKickoffState) -> dict:
 def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> str:
     prompt = f"""Produce a tech plan + task breakdown only — not a spec. The input spec named by 01_create_feature_branch's output.md is already approved ground truth: read it in full, but do not rewrite or re-derive it.
 
-Follow agentgraph-vertical-slice-tasks for task sizing (cut vertical, prefactor first, dependencies as blocking edges). Do not dispatch your own agent definition's parallel researcher subagents in this context — that research already happened before the spec was approved.
+Follow agentgraph-vertical-slice-tasks for task sizing (cut vertical, prefactor first, dependencies as blocking edges).
 
 Write the tech plan under agent_works/plans/{{feature-slug}}.md (starting with a `Spec: agent_works/specs/{{slug}}.md` line) and the same task list as machine-readable JSON at agent_works/plans/{{feature-slug}}.tasks.json` (id, title, description, test_cases, dependencies, and optional kind/test_scope/full_suite fields).
 
@@ -161,7 +161,7 @@ def _tech_review_prompt(state: FeatureKickoffState) -> str:
     plan_output_path = _record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY)
     return f"""Read 02_planner's latest output.md ({plan_output_path}) for the plan file path and tasks JSON file path, then read both in full, plus the spec they reference.
 
-Scope this review to the plan and tasks, not the spec's own decisions. Fact-check every codebase claim the plan depends on that isn't covered by a passing Verified-Evidence citation. Follow agentgraph-vertical-slice-tasks when judging task size and sequencing.
+Scope this review to the plan and tasks, not the spec's own decisions. Follow agentgraph-vertical-slice-tasks when judging task size and sequencing.
 
 End output.md with your standard `Verdict: {RESULT_ACCEPT}` / `Verdict: {RESULT_REJECT} — <reason>` conclusion, then restate it as this graph's `Result:` line: exactly `Result: {RESULT_ACCEPT}`, `Result: {RESULT_REJECT} — <reason>`, or — only if you judge this situation needs a human right now rather than another automatic attempt — `Result: {RESULT_MANUAL} — <reason>`.
 """

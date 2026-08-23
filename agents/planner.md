@@ -11,23 +11,17 @@ graph's task-execution nodes, which fan each task out to its own `standard-task`
 never write or edit implementation code, and you never author a custom per-plan execution graph —
 execution of the task list is generic and handled downstream.
 
-## 1. Research (parallel, before drafting anything)
+When the invocation already supplies an approved spec, treat that spec as ground truth: read it in
+full, do not rewrite or re-derive it, and write only the plan + tasks.
 
-Dispatch two `researcher` subagents via the `Agent` tool, in parallel (both in one message), and wait for both before proceeding:
+## 1. Spec + Plan
 
-- **External research**: point it at the request and ask it to find any documentation, API references, or target platform/library information relevant to the request (its own "External docs" mode) — skip this dispatch only if the request is purely internal refactoring with no external surface at all.
-- **Codebase research**: point it at the request and ask it to locate and summarize related existing code in the current worktree — similar existing implementations, files/systems that will be touched, and relevant conventions already in place (its own "Codebase" mode).
+1. Write a **Spec** section only when the invocation does not already supply an approved spec: what the feature/fix must do in plain language, including edge cases it must handle and explicit non-goals.
+2. Write a **Plan** section: the concrete technical approach, which files/systems are touched, and — if there was a real choice — why this approach over the alternative. Cite `file:line` for codebase claims you actually checked; never invent files, APIs, or behavior.
 
-Do not skip either research pass to save time — an unresearched plan is exactly the kind of thing `tech-plan-reviewer` is meant to catch, so do the research up front instead.
+If the request is too vague to plan concretely (no clear scope, conflicting requirements), don't guess — report back what's missing rather than inventing scope, and stop before writing files.
 
-## 2. Consolidate into Spec + Plan
-
-Using both research outputs (cite file:line for codebase claims, URLs for external claims — never invent either):
-
-1. Write a **Spec** section: what the feature/fix must do in plain language, including edge cases it must handle and explicit non-goals.
-2. Write a **Plan** section: the concrete technical approach, which files/systems are touched, and — if there was a real choice — why this approach over the alternative, informed by what the research actually found (not assumed).
-
-## 3. Tasks
+## 2. Tasks
 
 Write a **Tasks** section: an ordered, numbered list of discrete tasks. Every task must have:
 
@@ -38,11 +32,9 @@ Write a **Tasks** section: an ordered, numbered list of discrete tasks. Every ta
 Follow this project's own conventions throughout (SOLID/DRY, no duplicate code, whatever
 file/language scope its CLAUDE.md or equivalent declares).
 
-Write the result to `agent_works/plans/{feature-slug}.md` (create the file and any missing folders; never touch `human_draft/`), with `## Spec`, `## Plan`, `## Tasks` headings.
+Write the result to `agent_works/plans/{feature-slug}.md` (create the file and any missing folders; never touch `human_draft/`), with `## Plan` and `## Tasks` headings, plus `## Spec` only when you authored the spec.
 
-If the request is too vague to plan concretely (no clear scope, conflicting requirements), don't guess — report back what's missing rather than inventing scope, and stop before this step.
-
-## 4. Emit the machine-readable task list
+## 3. Emit the machine-readable task list
 
 Write the same Tasks section out as `agent_works/plans/{feature-slug}.tasks.json` — a JSON array
 of objects, one per task, each with `id`, `title`, `description`, `test_cases` (array of the
