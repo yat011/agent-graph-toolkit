@@ -1,4 +1,4 @@
-"""`agentgraph` CLI — start/resume/status/redrive a Run (deliverable e).
+"""`agentgraph` CLI — start/resume/status/redrive a Run.
 
 The Python-engine equivalent of the retired run-graph.js's resolve-run/next/status commands
 (see skills/agentgraph-run-graph/ENGINE-CLI.md for the full command surface). Unlike that engine,
@@ -15,18 +15,21 @@ import json
 import sys
 from pathlib import Path
 
+from agentgraph_engine.constants import (
+    ATTEMPT_COUNT_KEY,
+    GATE_HALT_REASONS,
+    HALTED_AT_NODE_KEY,
+    HALTED_KEY,
+    HALT_REASON_KEY,
+    ITEMS_KEY,
+    OUTCOME_KEY,
+    RUN_DIR_KEY,
+    SPEC_PATH_KEY,
+)
 from agentgraph_engine.graph_loader import GraphLoadError, get_build_graph, load_graph_module, resolve_graph_path
 from agentgraph_engine.runs import new_run_id, open_checkpointer, run_dir_for, thread_config
 
 DEFAULT_AGENT_WORKS_ROOT = Path("agent_works")
-
-# halt_reason values written by agentgraph_engine.routing's shared gate router (via
-# classify_gate) when a gate's manual/exhausted classification lands on a manual/blocked
-# terminal -- as opposed to "retries_exhausted" (an ordinary technical dispatch failure, whose
-# redrive must NOT reset attempt counts: the node just gets re-attempted with its existing
-# count intact, unchanged from before this feature existed). Only a genuine gate-manual halt
-# means "a human fixed the real problem — restart this loop cleanly."
-GATE_HALT_REASONS = {"manual_requested", "reject_attempts_exhausted", "unrecognized_result_exhausted"}
 
 
 def _load_build_graph(graph_name: str):
@@ -46,9 +49,9 @@ def _graph_name_from_path(run_path: Path) -> str:
 
 def _summarize(final_state: dict) -> dict:
     summary = {
-        "halted": bool(final_state.get("halted")),
-        "halt_reason": final_state.get("halt_reason"),
-        "outcome": final_state.get("outcome"),
+        HALTED_KEY: bool(final_state.get(HALTED_KEY)),
+        HALT_REASON_KEY: final_state.get(HALT_REASON_KEY),
+        OUTCOME_KEY: final_state.get(OUTCOME_KEY),
     }
     if "__interrupt__" in final_state:
         summary["interrupted"] = True
@@ -62,9 +65,9 @@ def cmd_start(args: argparse.Namespace) -> int:
     run_dir = run_dir_for(args.graph, run_id, agent_works_root)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    initial_state = {"run_dir": str(run_dir)}
+    initial_state = {RUN_DIR_KEY: str(run_dir)}
     if args.spec:
-        initial_state["spec_path"] = args.spec
+        initial_state[SPEC_PATH_KEY] = args.spec
     if args.input_json:
         initial_state.update(json.loads(Path(args.input_json).read_text(encoding="utf-8")))
 
@@ -111,29 +114,46 @@ def cmd_status(args: argparse.Namespace) -> int:
                 {
                     "run_path": str(run_path),
                     "next": list(snapshot.next),
-                    "values": {k: v for k, v in snapshot.values.items() if k not in ("items",)},
+                    "values": {k: v for k, v in snapshot.values.items() if k not in (ITEMS_KEY,)},
                 }
             )
         )
     return 0
 
 
+def _reset_nested_attempt_records(values: dict) -> dict:
+    """Zero every nested node record's attempt_count.
+
+    `route` / `result_line` are left intact: `update_state` reapplies the last node's
+    conditional edges, so clearing a gate's `route` would divert the redrive away from
+    `halted_at_node`. The redriven node overwrites its own record when it runs.
+    """
+    updates: dict = {}
+    for key, value in values.items():
+        if not isinstance(value, dict) or ATTEMPT_COUNT_KEY not in value:
+            continue
+        reset = dict(value)
+        reset[ATTEMPT_COUNT_KEY] = 0
+        updates[key] = reset
+    return updates
+
+
 def cmd_redrive(args: argparse.Namespace) -> int:
     """Reset a halted Run's failing node and re-attempt it fresh, without re-running anything
-    upstream of it. Implemented via LangGraph's checkpoint-history "time travel": find the most
-    recent checkpoint whose `.next` is exactly the node that halted (`halted_at_node`, set by
-    every halting node in the ported graphs), then fork forward from that checkpoint with the
-    halt fields cleared — see the empirical verification in gates/e-cli.md / PLAN.md's status
-    log for why this (rather than the `as_node` predecessor trick) was chosen: it needs no
-    per-graph predecessor map and works uniformly for any node, including ones with multiple
-    incoming edges (e.g. a loop-back target).
+    upstream of it.
 
-    When the halt being redriven is one of `GATE_HALT_REASONS` (a gate's reject-exhausted,
-    explicit `manual`, or unrecognized-exhausted classification — see agentgraph_engine.routing),
-    every `*_attempt_count`/`*_self_retry_count` field is also reset to 0: a human fixing the
-    real problem is a clean restart of that loop, not one more automatic attempt continuing the
-    old count. An ordinary technical-failure halt (`halt_reason == "retries_exhausted"`) is left
-    exactly as before — no counters reset, node just re-attempted with its existing count intact.
+    Implemented via LangGraph checkpoint-history time travel: find the most recent checkpoint
+    whose `.next` is exactly the node that halted (`halted_at_node`), then fork forward from
+    that checkpoint with the halt fields cleared. No per-graph predecessor map is required;
+    this works for any node, including ones with multiple incoming edges.
+
+    When the halt being redriven is one of `GATE_HALT_REASONS` (explicit `manual`, reject
+    budget exhausted, or an unrecognized Result: line), every nested node record that has an
+    `attempt_count` is reset to 0: a human fixing the real problem is a clean restart of
+    that loop. Classification fields on those records are left as-is because `update_state`
+    reapplies the last node's conditional edges; the redriven node overwrites its own
+    record when it runs. An ordinary technical-failure halt (`halt_reason ==
+    retries_exhausted`) is left as-is — no counters reset.
     """
     run_path = Path(args.run).resolve()
     graph_name = _graph_name_from_path(run_path)
@@ -145,10 +165,10 @@ def cmd_redrive(args: argparse.Namespace) -> int:
         compiled = build_graph(checkpointer=checkpointer)
         config = thread_config(run_id)
         current = compiled.get_state(config)
-        if not current.values.get("halted"):
+        if not current.values.get(HALTED_KEY):
             print(json.dumps({"status": "error", "error": "nothing to redrive — run is not halted"}))
             return 1
-        node_id = current.values.get("halted_at_node")
+        node_id = current.values.get(HALTED_AT_NODE_KEY)
         if not node_id:
             print(json.dumps({"status": "error", "error": "halted_at_node not recorded — cannot redrive"}))
             return 1
@@ -162,19 +182,9 @@ def cmd_redrive(args: argparse.Namespace) -> int:
             print(json.dumps({"status": "error", "error": f"no checkpoint found before node '{node_id}'"}))
             return 1
 
-        updates = {"halted": False, "halt_reason": None, "halted_at_node": None}
-        if current.values.get("halt_reason") in GATE_HALT_REASONS:
-            # A human resolved a manual/rejected gate, not a technical crash — reset every
-            # attempt/self-retry counter so the redriven loop restarts clean at zero, per the
-            # gate router's reset-on-redrive convention, rather than continuing to count from
-            # where the exhausted attempt left off.
-            updates.update(
-                {
-                    k: 0
-                    for k, v in target.values.items()
-                    if (k.endswith("_attempt_count") or k.endswith("_self_retry_count")) and isinstance(v, int)
-                }
-            )
+        updates = {HALTED_KEY: False, HALT_REASON_KEY: None, HALTED_AT_NODE_KEY: None}
+        if current.values.get(HALT_REASON_KEY) in GATE_HALT_REASONS:
+            updates.update(_reset_nested_attempt_records(target.values))
         compiled.update_state(target.config, updates)
         result = compiled.invoke(None, config={**config, "recursion_limit": args.recursion_limit})
         print(json.dumps({"run_path": str(run_path), "run_id": run_id, "redriven_node": node_id, **_summarize(result)}))

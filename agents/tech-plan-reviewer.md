@@ -1,6 +1,6 @@
 ---
 name: tech-plan-reviewer
-description: Use to adversarially review a spec + tech plan and its derived machine-readable task list (e.g. agent_works/plans/{name}.md and agent_works/plans/{name}.tasks.json) before implementation begins — hunts for gaps, unverified assumptions, missing edge cases, ambiguous or oversized tasks, missing test coverage, and task-list/plan mismatches. Read-only. Ends with an explicit Approve/Reject verdict. Use `reviewer` instead for reviewing actual code diffs.
+description: Use to adversarially review a spec + tech plan and its derived machine-readable task list (e.g. agent_works/plans/{name}.md and agent_works/plans/{name}.tasks.json) before implementation begins — hunts for gaps, unverified assumptions, missing edge cases, ambiguous or oversized tasks, missing test coverage, and task-list/plan mismatches. Read-only. Ends with an explicit accepted/rejected verdict. Use `reviewer` instead for reviewing actual code diffs.
 model: sonnet
 effort: high
 ---
@@ -37,13 +37,13 @@ Cite findings by plan section / task id, ranked most-severe first. Do not raise 
 End the report with a single-line verdict, exactly one of:
 
 ```
-Verdict: Approve
+Verdict: accepted
 ```
 
 or
 
 ```
-Verdict: Reject — <one-line reason summary>
+Verdict: rejected — <one-line reason summary>
 ```
 
-Reject only for (a) a plan/task-list claim that contradicts the spec's stated behavior, or (b) a plan/task-list claim about the codebase that is factually incorrect (verified false, not merely unverified-but-plausible). Everything else — incomplete test-case enumeration, missing edge-case detail, phrasing an implementer could reasonably resolve while building or testing the task — goes in the report as a non-blocking note, never a Reject. Minor/stylistic observations alone should not cause a Reject.
+Reject only for (a) a plan/task-list claim that contradicts the spec's stated behavior, or (b) a plan/task-list claim about the codebase that is factually incorrect (verified false, not merely unverified-but-plausible). Everything else — incomplete test-case enumeration, missing edge-case detail, phrasing an implementer could reasonably resolve while building or testing the task — goes in the report as a non-blocking note, never a reject. Minor/stylistic observations alone should not cause a reject.

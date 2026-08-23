@@ -9,6 +9,12 @@ survive. `greet`/`fan_out` (the nodes before the interrupt) are call-counted and
 exactly once each, proving the resume continues from the checkpoint rather than restarting cold.
 """
 
+from agentgraph_engine.constants import (
+    ITEMS_KEY,
+    OUTCOME_KEY,
+    RUN_DIR_KEY,
+)
+
 import json
 import sqlite3
 import subprocess
@@ -16,6 +22,12 @@ from pathlib import Path
 
 from langgraph.types import Command
 
+from agentgraph_engine.examples.hello_graph.nodes import (
+    CHECKPOINT_GATE_NODE,
+    FAN_OUT_NODE,
+    GREET_NODE,
+    RESULTS_KEY,
+)
 from agentgraph_engine.graph_loader import load_graph_module
 from agentgraph_engine.runs import checkpoint_path_for, open_checkpointer, run_dir_for
 
@@ -46,15 +58,15 @@ def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(m
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _ok_executor())
 
     module = load_graph_module(GRAPH_PATH)
-    call_counts = {"greet": 0, "fan_out": 0}
+    call_counts = {GREET_NODE: 0, FAN_OUT_NODE: 0}
     orig_greet, orig_fan_out = module.greet, module.fan_out
 
     def counting_greet(state):
-        call_counts["greet"] += 1
+        call_counts[GREET_NODE] += 1
         return orig_greet(state)
 
     def counting_fan_out(state):
-        call_counts["fan_out"] += 1
+        call_counts[FAN_OUT_NODE] += 1
         return orig_fan_out(state)
 
     module.greet = counting_greet
@@ -69,11 +81,11 @@ def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(m
     # --- Pass 1: run to the interrupt(), using checkpointer instance #1. ---
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp1:
         compiled1 = module.build_graph(checkpointer=cp1)
-        r1 = compiled1.invoke({"run_dir": str(run_dir), "items": ["p", "q"]}, config=config)
+        r1 = compiled1.invoke({RUN_DIR_KEY: str(run_dir), ITEMS_KEY: ["p", "q"]}, config=config)
         assert "__interrupt__" in r1, "expected the graph to pause at checkpoint_gate's interrupt()"
-        assert "outcome" not in r1
+        assert OUTCOME_KEY not in r1
 
-    assert call_counts == {"greet": 1, "fan_out": 1}
+    assert call_counts == {GREET_NODE: 1, FAN_OUT_NODE: 1}
 
     # --- Prove real on-disk persistence, not an in-memory artifact. ---
     sqlite_path = checkpoint_path_for(graph_name, run_id, agent_works_root)
@@ -95,11 +107,11 @@ def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(m
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp2:
         compiled2 = module.build_graph(checkpointer=cp2)
         r2 = compiled2.invoke(Command(resume="go"), config=config)
-        assert r2["outcome"] == "pass"
-        assert r2["fan_out_results"] == ["P", "Q"]
+        assert r2[OUTCOME_KEY] == "pass"
+        assert r2[FAN_OUT_NODE][RESULTS_KEY] == ["P", "Q"]
 
     # greet/fan_out must NOT have re-run: the resume continued from the checkpoint, not cold.
-    assert call_counts == {"greet": 1, "fan_out": 1}
+    assert call_counts == {GREET_NODE: 1, FAN_OUT_NODE: 1}
 
 
 def test_status_via_cli_module_reports_pending_node_before_resume(monkeypatch, tmp_path):
@@ -116,6 +128,6 @@ def test_status_via_cli_module_reports_pending_node_before_resume(monkeypatch, t
 
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
         compiled = module.build_graph(checkpointer=cp)
-        compiled.invoke({"run_dir": str(run_dir), "items": ["x"]}, config=config)
+        compiled.invoke({RUN_DIR_KEY: str(run_dir), ITEMS_KEY: ["x"]}, config=config)
         snapshot = compiled.get_state(config)
-        assert snapshot.next == ("checkpoint_gate",)
+        assert snapshot.next == (CHECKPOINT_GATE_NODE,)

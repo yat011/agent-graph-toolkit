@@ -1,8 +1,8 @@
-"""Tests for the shared gate router's redrive/reset behavior (agentgraph_engine.cli.cmd_redrive
-+ agentgraph_engine.routing): a human resolving a gate's manual/exhausted halt via `agentgraph
-redrive` restarts the loop with its attempt/self-retry counters reset to zero, landing back at
-the gate's loop-back target -- never continuing the old count. Uses a fake `_run_subprocess`
-(no real `claude` CLI calls), same seam as the other graph tests.
+"""Tests for cmd_redrive nested attempt_count reset.
+
+A human resolving a gate's manual/exhausted halt via `agentgraph redrive` restarts the loop with
+nested attempt_count fields reset to zero, landing back at the gate's loop-back target. Uses a
+fake `_run_subprocess` (no real `claude` CLI calls).
 """
 
 import argparse
@@ -11,6 +11,24 @@ import subprocess
 from pathlib import Path
 
 from agentgraph_engine import cli as agentgraph_cli
+from agentgraph_engine.constants import (
+    ATTEMPT_COUNT_KEY,
+    HALTED_AT_NODE_KEY,
+    HALTED_KEY,
+    HALT_REASON_KEY,
+    HALT_REJECT_ATTEMPTS_EXHAUSTED,
+    HALT_RETRIES_EXHAUSTED,
+    IMPLEMENT_REQUIREMENTS_NODE,
+    ITEM_KEY,
+    OUTCOME_KEY,
+    OUTCOME_SUCCESS,
+    RESULT_ACCEPT,
+    RESULT_IMPLEMENTED,
+    RESULT_REJECT,
+    RESULT_VERIFIED,
+    REVIEW_NODE,
+    RUN_DIR_KEY,
+)
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module, resolve_graph_path
 from agentgraph_engine.runs import open_checkpointer, run_dir_for, thread_config
 
@@ -50,18 +68,16 @@ def test_redrive_resets_attempt_count_after_manual_resolution(monkeypatch, tmp_p
     agent_works_root = tmp_path / "agent_works"
     run_dir = run_dir_for(graph_name, run_id, agent_works_root)
 
-    # Drive 03_review's gate to reject-exhausted (3 implement/reject cycles) -> manual_flag,
-    # halted, halted_at_node == "implement_requirements" (review's loop-back target).
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
         _script_executor(
             [
-                ("Result: implemented", True),
-                ("Result: rejected — bad", True),
-                ("Result: implemented", True),
-                ("Result: rejected — bad", True),
-                ("Result: implemented", True),
-                ("Result: rejected — bad", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_REJECT} — bad", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_REJECT} — bad", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_REJECT} — bad", True),
                 ("manual flag summary\nResult: flagged", True),
             ]
         ),
@@ -70,20 +86,19 @@ def test_redrive_resets_attempt_count_after_manual_resolution(monkeypatch, tmp_p
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
         compiled = _standard_task_build_graph()(checkpointer=cp)
         halted_state = compiled.invoke(
-            {"run_dir": str(run_dir), "item": {"title": "t", "description": "d"}},
+            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: {"title": "t", "description": "d"}},
             config={**config, "recursion_limit": 50},
         )
 
-    assert halted_state["implement_attempt_count"] == 3
-    assert halted_state["review_attempt_count"] == 3
-    assert halted_state["halted"] is True
-    assert halted_state["halt_reason"] == "reject_attempts_exhausted"
-    assert halted_state["halted_at_node"] == "implement_requirements"
+    assert halted_state[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 3
+    assert halted_state[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 3
+    assert halted_state[HALTED_KEY] is True
+    assert halted_state[HALT_REASON_KEY] == HALT_REJECT_ATTEMPTS_EXHAUSTED
+    assert halted_state[HALTED_AT_NODE_KEY] == IMPLEMENT_REQUIREMENTS_NODE
 
-    # A human "fixes the real problem" and redrives: fresh implement -> accepted -> success.
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([("Result: implemented", True), ("Result: accepted", True)]),
+        _script_executor([(f"Result: {RESULT_IMPLEMENTED}", True), (f"Result: {RESULT_ACCEPT}", True)]),
     )
     args = argparse.Namespace(run=str(run_dir), recursion_limit=50)
     exit_code = agentgraph_cli.cmd_redrive(args)
@@ -93,22 +108,16 @@ def test_redrive_resets_attempt_count_after_manual_resolution(monkeypatch, tmp_p
         compiled = _standard_task_build_graph()(checkpointer=cp)
         final_state = compiled.get_state(config).values
 
-    assert final_state["outcome"] == "success"
-    # The redriven loop restarted clean at zero -- one fresh implement/review pass, not a
-    # continuation of the exhausted count (which would read 4 here, not 1).
-    assert final_state["implement_attempt_count"] == 1
-    assert final_state["review_attempt_count"] == 1
-    assert final_state["halted"] is False
-    assert final_state["halted_at_node"] is None
+    assert final_state[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert final_state[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert final_state[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert final_state[HALTED_KEY] is False
+    assert final_state[HALTED_AT_NODE_KEY] is None
 
 
 def test_redrive_of_a_plain_technical_failure_does_not_reset_attempt_count(monkeypatch, tmp_path):
-    """A `retries_exhausted` halt (an ordinary CLI dispatch failure, unrelated to the gate-manual
-    mechanism) keeps its pre-existing redrive behavior exactly: the node's attempt count is left
-    alone, continuing from where it was -- not reset to zero the way a gate-manual halt's redrive
-    is. Sets up a SECOND visit to implement_requirements (after one accepted-reject loop) so its
-    attempt count is non-zero going into the technical failure, making "continues" vs. "reset"
-    actually observable.
+    """A `retries_exhausted` halt keeps its attempt_count: the node continues from where it was,
+    not reset to zero the way a gate-manual halt's redrive is.
     """
     graph_name = "standard-task"
     run_id = "20260101T000000_technical"
@@ -119,10 +128,10 @@ def test_redrive_of_a_plain_technical_failure_does_not_reset_attempt_count(monke
         "agentgraph_engine.dispatch._run_subprocess",
         _script_executor(
             [
-                ("Result: implemented", True),  # implement attempt 1
-                ("Result: rejected — bad", True),  # review attempt 1 -> loop back
-                (None, False),  # implement attempt 2, dispatch_with_retry try 1/2 -> fails
-                (None, False),  # implement attempt 2, dispatch_with_retry try 2/2 -> fails -> halt
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_REJECT} — bad", True),
+                (None, False),
+                (None, False),
             ]
         ),
     )
@@ -130,18 +139,18 @@ def test_redrive_of_a_plain_technical_failure_does_not_reset_attempt_count(monke
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
         compiled = _standard_task_build_graph()(checkpointer=cp)
         halted_state = compiled.invoke(
-            {"run_dir": str(run_dir), "item": {"title": "t", "description": "d"}},
+            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: {"title": "t", "description": "d"}},
             config={**config, "recursion_limit": 50},
         )
 
-    assert halted_state["halted"] is True
-    assert halted_state["halt_reason"] == "retries_exhausted"
-    assert halted_state["halted_at_node"] == "implement_requirements"
-    assert halted_state["implement_attempt_count"] == 2
+    assert halted_state[HALTED_KEY] is True
+    assert halted_state[HALT_REASON_KEY] == HALT_RETRIES_EXHAUSTED
+    assert halted_state[HALTED_AT_NODE_KEY] == IMPLEMENT_REQUIREMENTS_NODE
+    assert halted_state[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 2
 
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([("Result: verified", True)]),
+        _script_executor([(f"Result: {RESULT_VERIFIED}", True)]),
     )
     args = argparse.Namespace(run=str(run_dir), recursion_limit=50)
     exit_code = agentgraph_cli.cmd_redrive(args)
@@ -151,7 +160,5 @@ def test_redrive_of_a_plain_technical_failure_does_not_reset_attempt_count(monke
         compiled = _standard_task_build_graph()(checkpointer=cp)
         final_state = compiled.get_state(config).values
 
-    assert final_state["outcome"] == "success"
-    # Continues the count (1 -> 2), never reset to 0 -- this is the pre-existing technical-halt
-    # redrive path, untouched by the new gate-manual reset-on-redrive behavior.
-    assert final_state["implement_attempt_count"] == 2
+    assert final_state[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert final_state[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 2

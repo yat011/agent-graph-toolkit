@@ -36,12 +36,12 @@ a syntax change**, and it changes what you (the Coordinating agent) actually do:
 
 ## Inputs
 
-- A graph name (required). Resolved via `agentgraph_engine.graph_loader.resolve_graph_path`: a
-  project graph at `agent_works/graphs/{graph-name}/graph.py` first (written by
-  `agentgraph-define-graph` for a specific plan), falling back to a built-in template at
-  `skills/agentgraph-run-graph/templates/{graph-name}/graph.py` (`feature-kickoff`,
-  `standard-task`) if no project graph exists by that name. **Neither is ever copied anywhere** —
-  both load in place via `importlib`, exactly where they already live.
+- A graph name (required). Resolved via `agentgraph_engine.graph_loader.resolve_graph_path` in
+  this order: **project** (`agent_works/graphs/{graph-name}/graph.py`) **> user**
+  (`~/.agents/graphs/{graph-name}/graph.py`, via `Path.home()`) **> template**
+  (`skills/agentgraph-run-graph/templates/{graph-name}/graph.py` — `feature-kickoff`,
+  `standard-task`). **None of these is ever copied anywhere** — each loads in place via
+  `importlib`, exactly where it already lives.
 - Optionally, "start fresh" / "new run" — just call `agentgraph start` again; it always creates a
   new `run_id`, never silently reuses an old one.
 - Optionally, "redrive `{graph-name}`" to resume a **halted** run after fixing whatever caused it —
@@ -75,15 +75,18 @@ guess:
   `success`, `blocked`, `manual_review` for `feature-kickoff`; `success`, `manual_flag` for
   `standard-task`). Report it to the user in plain language (what `outcome` means for this
   specific graph) and stop.
-- **`halted: true`** — a node exhausted its `retry` budget (`halt_reason: "retries_exhausted"`) or
-  a sequential map had items stuck on unresolved `dependencies` (`halt_reason:
+- **`halted: true`** — a node exhausted its `retry` budget (`halt_reason: "retries_exhausted"`), a
+  sequential map had items stuck on unresolved `dependencies` (`halt_reason:
   "unmet_dependencies"` — a cycle; a permanently-blocked item, e.g. one whose dependency ended at
-  a non-success terminal, does **not** halt the whole map on its own). Report the reason and, if
-  useful, `agentgraph status --run {run_path}` to see the full state snapshot (including which
-  node halted). Do **not** auto-redrive. Ask the user to fix the underlying cause (a broken
-  environment, a genuinely-needed design decision, etc.), then call `agentgraph redrive --run
-  {run_path}` — this re-attempts only the failing node fresh, using the checkpoint history to
-  replay from exactly the point before it ran, never re-running anything upstream.
+  a non-success terminal, does **not** halt the whole map on its own), or a gate halted for a
+  human (`manual_requested`, `reject_attempts_exhausted`, or `unrecognized_result`). An
+  unrecognized `Result:` line on a gate routes to manual **immediately** — there is no self-retry
+  hop. Report the reason and, if useful, `agentgraph status --run {run_path}` to see the full
+  state snapshot (including which node halted). Do **not** auto-redrive. Ask the user to fix the
+  underlying cause (a broken environment, a genuinely-needed design decision, etc.), then call
+  `agentgraph redrive --run {run_path}` — this re-attempts only the failing node fresh, using the
+  checkpoint history to replay from exactly the point before it ran, never re-running anything
+  upstream. A gate-manual halt also zeros nested `attempt_count` fields on redrive.
 - **`interrupted: true`** — the graph paused at an explicit `interrupt()` call the graph's author
   deliberately placed (rare in `feature-kickoff`/`standard-task` today; real in
   `agentgraph_engine/examples/hello_graph/`, which is what proves the mechanism —
@@ -94,9 +97,9 @@ guess:
 
 ## Halting
 
-Only two halt reasons exist now — no `capability_gap` (there's no coordinating LLM positioned to
-make a per-dispatch tool-gap judgment anymore, so a bad node/prompt pairing just surfaces as an
-ordinary technical failure, same path as any other):
+There is no `capability_gap` halt (there's no coordinating LLM positioned to make a per-dispatch
+tool-gap judgment anymore, so a bad node/prompt pairing just surfaces as an ordinary technical
+failure, same path as any other). Halt reasons:
 
 - `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit, or the
   Worker didn't write its required output file) more times than its `retry` count allows. See
@@ -104,6 +107,11 @@ ordinary technical failure, same path as any other):
   `--permission-mode` is chosen.
 - `unmet_dependencies` — a sequential map (`feature-kickoff`'s `run_tasks`) had remaining items
   stuck on unresolved `dependencies` with nothing ready to progress (a cycle).
+- `manual_requested` — a gate's `Result:` line started with `manual`.
+- `reject_attempts_exhausted` — a gate's reject-loop budget on the retry target's `attempt_count`
+  was already at the cap.
+- `unrecognized_result` — a gate's `Result:` line matched none of accepted / rejected / manual.
+  Routes to manual immediately; no self-retry hop.
 
 Re-invoking `agentgraph start` on a graph with a halted run does **not** resume it — start always
 creates a fresh run. Use `redrive` explicitly.

@@ -87,11 +87,9 @@ def test_get_build_graph_raises_when_neither_present(tmp_path):
 
 
 def test_resolve_template_path_finds_real_repo_templates():
-    # These are populated by a later leaf (feature-kickoff / standard-task graph.py); this test
-    # asserts the resolver itself works against whatever templates exist at test time.
     templates_root = Path(__file__).resolve().parent.parent / "skills" / "agentgraph-run-graph" / "templates"
     if not (templates_root / "standard-task" / "graph.py").exists():
-        pytest.skip("standard-task/graph.py not yet ported")
+        pytest.skip("standard-task/graph.py missing")
     path = resolve_template_path("standard-task", templates_root)
     assert path.name == "graph.py"
 
@@ -103,26 +101,81 @@ def test_resolve_template_path_missing_graph_raises(tmp_path):
 
 def test_resolve_graph_path_prefers_project_graph_over_template(tmp_path):
     project_root = tmp_path / "agent_works" / "graphs"
+    user_root = tmp_path / "user_graphs"
     templates_root = tmp_path / "templates"
     (project_root / "demo").mkdir(parents=True)
     (project_root / "demo" / "graph.py").write_text("graph = 1\n", encoding="utf-8")
     (templates_root / "demo").mkdir(parents=True)
     (templates_root / "demo" / "graph.py").write_text("graph = 2\n", encoding="utf-8")
 
-    path = resolve_graph_path("demo", project_graphs_root=project_root, templates_root=templates_root)
+    path = resolve_graph_path(
+        "demo",
+        project_graphs_root=project_root,
+        user_graphs_root=user_root,
+        templates_root=templates_root,
+    )
     assert path == project_root / "demo" / "graph.py"
 
 
 def test_resolve_graph_path_falls_back_to_template_when_no_project_graph(tmp_path):
     project_root = tmp_path / "agent_works" / "graphs"
+    user_root = tmp_path / "user_graphs"
     templates_root = tmp_path / "templates"
     (templates_root / "only-template").mkdir(parents=True)
     (templates_root / "only-template" / "graph.py").write_text("graph = 1\n", encoding="utf-8")
 
-    path = resolve_graph_path("only-template", project_graphs_root=project_root, templates_root=templates_root)
+    path = resolve_graph_path(
+        "only-template",
+        project_graphs_root=project_root,
+        user_graphs_root=user_root,
+        templates_root=templates_root,
+    )
     assert path == templates_root / "only-template" / "graph.py"
+
+
+def test_resolve_graph_path_prefers_project_over_user_over_template(tmp_path):
+    project_root = tmp_path / "agent_works" / "graphs"
+    user_root = tmp_path / "user_graphs"
+    templates_root = tmp_path / "templates"
+    (project_root / "demo").mkdir(parents=True)
+    (project_root / "demo" / "graph.py").write_text("graph = project\n", encoding="utf-8")
+    (user_root / "demo").mkdir(parents=True)
+    (user_root / "demo" / "graph.py").write_text("graph = user\n", encoding="utf-8")
+    (templates_root / "demo").mkdir(parents=True)
+    (templates_root / "demo" / "graph.py").write_text("graph = template\n", encoding="utf-8")
+
+    path = resolve_graph_path(
+        "demo",
+        project_graphs_root=project_root,
+        user_graphs_root=user_root,
+        templates_root=templates_root,
+    )
+    assert path == project_root / "demo" / "graph.py"
+
+
+def test_resolve_graph_path_prefers_user_over_template_when_no_project_graph(tmp_path):
+    project_root = tmp_path / "agent_works" / "graphs"
+    user_root = tmp_path / "user_graphs"
+    templates_root = tmp_path / "templates"
+    (user_root / "demo").mkdir(parents=True)
+    (user_root / "demo" / "graph.py").write_text("graph = user\n", encoding="utf-8")
+    (templates_root / "demo").mkdir(parents=True)
+    (templates_root / "demo" / "graph.py").write_text("graph = template\n", encoding="utf-8")
+
+    path = resolve_graph_path(
+        "demo",
+        project_graphs_root=project_root,
+        user_graphs_root=user_root,
+        templates_root=templates_root,
+    )
+    assert path == user_root / "demo" / "graph.py"
 
 
 def test_resolve_graph_path_raises_when_neither_exists(tmp_path):
     with pytest.raises(GraphLoadError):
-        resolve_graph_path("nope", project_graphs_root=tmp_path / "a", templates_root=tmp_path / "b")
+        resolve_graph_path(
+            "nope",
+            project_graphs_root=tmp_path / "a",
+            user_graphs_root=tmp_path / "u",
+            templates_root=tmp_path / "b",
+        )

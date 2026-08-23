@@ -34,15 +34,15 @@ template (loaded dynamically from `skills/agentgraph-run-graph/templates/feature
 
 ```
 create_feature_branch -> planner -> tech_plan_reviewer
-                                     |-[Approve]--------------------------------> load_tasks
-                                     |-[Reject, attempted 3 times]--------------> blocked_plan_rejected
-                                     `-[Reject, attempted < 3 times]------------> planner  (loop back)
+                                     |-[accepted]-------------------------------> load_tasks
+                                     |-[rejected, attempted 3 times]------------> blocked_plan_rejected
+                                     `-[rejected, attempted < 3 times]----------> planner  (loop back)
 
 load_tasks
- |-[loaded, env working]-> run_tasks (sequential map: standard-task per task) -> final_review
- |                                                                                    |-[passed]--------------> success
- |                                                                                    `-[issues found]--------> needs_manual_review
- `-[env down]-------------------------------------------------------------------------------------------> needs_manual_review
+ |-[accepted, env working]-> run_tasks (sequential map: standard-task per task) -> final_review
+ |                                                                                    |-[accepted]------------> success
+ |                                                                                    `-[manual/issues]-------> needs_manual_review
+ `-[manual, env down]-----------------------------------------------------------------------------------> needs_manual_review
 ```
 
 A custom graph is two skill invocations:
@@ -59,6 +59,10 @@ mean to abandon the old one.
 
 ```
 agentgraph_engine/                    # the Python engine (uv-managed package)
+  constants.py                        # shared route labels, Result: phrases, halt reasons
+  routing.py                          # GateConfig + classify_gate / gate_route
+  states/                             # composed per-node TypedDict records
+  nodes/                              # engine-shared node functions (halted terminal)
   dispatch.py                         # headless-CLI Worker dispatch + Result: line parsing
   runs.py                             # run id / checkpoint path conventions (SqliteSaver)
   graph_loader.py                     # importlib-based dynamic graph.py loading

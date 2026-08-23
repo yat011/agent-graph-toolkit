@@ -7,6 +7,21 @@ import json
 import subprocess
 from pathlib import Path
 
+from agentgraph_engine.constants import (
+    HALTED_KEY,
+    HALT_REASON_KEY,
+    HALT_RETRIES_EXHAUSTED,
+    ITEMS_KEY,
+    OUTCOME_KEY,
+    RESULT_KEY,
+    RUN_DIR_KEY,
+)
+from agentgraph_engine.examples.hello_graph.nodes import (
+    DISPATCH_WORKER_NODE,
+    FAN_OUT_NODE,
+    RESULTS_KEY,
+)
+
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
@@ -46,14 +61,14 @@ def test_pauses_at_checkpoint_gate_then_resumes_to_pass(monkeypatch, tmp_path):
     graph = build_graph(checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "hello-1"}}
 
-    r1 = graph.invoke({"run_dir": str(tmp_path), "items": ["alpha", "beta", "gamma"]}, config=config)
+    r1 = graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEMS_KEY: ["alpha", "beta", "gamma"]}, config=config)
     assert "__interrupt__" in r1
-    assert "outcome" not in r1
+    assert OUTCOME_KEY not in r1
 
     r2 = graph.invoke(Command(resume="go"), config=config)
-    assert r2["outcome"] == "pass"
-    assert r2["fan_out_results"] == ["ALPHA", "BETA", "GAMMA"]
-    assert r2["worker_result_line"] == "greeted"
+    assert r2[OUTCOME_KEY] == "pass"
+    assert r2[FAN_OUT_NODE][RESULTS_KEY] == ["ALPHA", "BETA", "GAMMA"]
+    assert r2[DISPATCH_WORKER_NODE][RESULT_KEY] == "greeted"
 
 
 def test_worker_dispatch_failure_after_resume_routes_to_halted(monkeypatch, tmp_path):
@@ -65,10 +80,10 @@ def test_worker_dispatch_failure_after_resume_routes_to_halted(monkeypatch, tmp_
     graph = build_graph(checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "hello-2"}}
 
-    graph.invoke({"run_dir": str(tmp_path), "items": ["x"]}, config=config)
+    graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEMS_KEY: ["x"]}, config=config)
     result = graph.invoke(Command(resume="go"), config=config)
-    assert result.get("halted") is True
-    assert result.get("halt_reason") == "retries_exhausted"
+    assert result.get(HALTED_KEY) is True
+    assert result.get(HALT_REASON_KEY) == HALT_RETRIES_EXHAUSTED
 
 
 def test_checker_fails_when_worker_result_line_wrong(monkeypatch, tmp_path):
@@ -77,6 +92,6 @@ def test_checker_fails_when_worker_result_line_wrong(monkeypatch, tmp_path):
     graph = build_graph(checkpointer=InMemorySaver())
     config = {"configurable": {"thread_id": "hello-3"}}
 
-    graph.invoke({"run_dir": str(tmp_path), "items": ["a", "b"]}, config=config)
+    graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEMS_KEY: ["a", "b"]}, config=config)
     result = graph.invoke(Command(resume="go"), config=config)
-    assert result["outcome"] == "fail"
+    assert result[OUTCOME_KEY] == "fail"

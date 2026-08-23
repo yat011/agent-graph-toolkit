@@ -26,17 +26,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from agentgraph_engine.constants import MODEL_CHEAP, ROLE_GENERAL_PURPOSE
+
 RESULT_LINE_RE = re.compile(r"(?m)^Result:\s*(.+?)\s*$")
 
 # agents/{role}.md lives two levels up from this file (repo_root/agentgraph_engine/dispatch.py).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
 # `model: cheap` (and the legacy `haiku` alias) map to the CLI's cheapest model.
-MODEL_ALIASES = {"cheap": "haiku", "haiku": "haiku"}
+MODEL_ALIASES = {MODEL_CHEAP: "haiku", "haiku": "haiku"}
 
 # A role with no agents/{role}.md file (e.g. "general-purpose") gets no persona text prepended —
 # the task prompt is dispatched as-is.
-NO_PERSONA_ROLES = {"general-purpose"}
+NO_PERSONA_ROLES = {ROLE_GENERAL_PURPOSE}
 
 
 def _permission_mode_args(resolved_model: Optional[str]) -> list:

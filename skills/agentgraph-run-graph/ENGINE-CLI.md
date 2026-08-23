@@ -15,9 +15,11 @@ loads (CONTEXT.md's "Executor").
 
 ### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N]`
 
-Starts a brand-new Run of the named template graph (`feature-kickoff`, `standard-task`, or any
-other `skills/agentgraph-run-graph/templates/{name}/graph.py`), loaded dynamically via
-`agentgraph_engine.graph_loader` (never copied into a project). Creates
+Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-task`, a project graph,
+or a user graph), loaded dynamically via `agentgraph_engine.graph_loader` (never copied into a
+project). Resolution order is project (`agent_works/graphs/{name}/graph.py`) then user
+(`~/.agents/graphs/{name}/graph.py`, via `Path.home()`) then built-in template
+(`skills/agentgraph-run-graph/templates/{name}/graph.py`). Creates
 `agent_works/{graph_name}/runs/{run_id}/` (`run_id = {timestamp}_{slug}`, mirroring the old
 engine's run-folder convention) with its own `checkpoints.sqlite` (one `SqliteSaver` per Run,
 `thread_id == run_id` — CONTEXT.md's "Run"), then drives the compiled graph to completion, a halt,
@@ -47,19 +49,25 @@ reached `END`).
 
 ### `agentgraph redrive --run <run_path> [--recursion-limit N]`
 
-Re-attempts a **halted** Run's failing node fresh (a technical failure that exhausted its node's
-`retry` budget — see `halt_reason: retries_exhausted`/`unmet_dependencies`), without re-running
-anything upstream of it. Every halting node in both ported graphs records its own node name as
-`halted_at_node` in state; `redrive` walks the checkpoint history
-(`compiled.get_state_history()`) for the most recent snapshot whose `.next` is exactly that node,
-clears the halt fields there, and forks execution forward from that point. Errors (exit 1, JSON
-`{"status":"error", ...}`) if the Run isn't halted, or `halted_at_node` wasn't recorded.
+Re-attempts a **halted** Run's failing node fresh, without re-running anything upstream of it.
+Every halting node records its own node name as `halted_at_node` in state; `redrive` walks the
+checkpoint history (`compiled.get_state_history()`) for the most recent snapshot whose `.next`
+is exactly that node, clears the halt fields there, and forks execution forward from that point.
+Errors (exit 1, JSON `{"status":"error", ...}`) if the Run isn't halted, or `halted_at_node`
+wasn't recorded.
+
+When the halt being redriven is a gate-manual reason (`manual_requested`,
+`reject_attempts_exhausted`, `unrecognized_result`), every nested node record that has an
+`attempt_count` is zeroed so the loop restarts clean. An ordinary `retries_exhausted` halt
+does not reset counters.
+
+An unrecognized `Result:` line on a gate is `unrecognized_result` and routes to manual
+**immediately** — there is no self-retry hop.
 
 ## Halting
 
-Only two halt reasons exist now (no `capability_gap` — there's no coordinating LLM positioned to
-make that judgment per-dispatch anymore; a bad node/prompt pairing just surfaces as an ordinary
-technical failure):
+There is no `capability_gap` halt — there's no coordinating LLM positioned to make that judgment
+per-dispatch anymore; a bad node/prompt pairing just surfaces as an ordinary technical failure.
 
 - `retries_exhausted` — a node's headless-CLI dispatch failed (non-zero exit, or the worker
   didn't write its required output file) more times than its `retry` count allows.
@@ -67,6 +75,10 @@ technical failure):
   unfinished `dependencies` (a cycle) with nothing ready to dispatch. A permanently-blocked item
   (a missing dependency id, or one that finished at `manual_flag`) does **not** halt the whole
   map — it's left `blocked` so `06_final_review` can flag it.
+- `manual_requested` — a gate's `Result:` line started with `manual`.
+- `reject_attempts_exhausted` — a gate's reject-loop budget was already at the cap.
+- `unrecognized_result` — a gate's `Result:` line matched none of accepted / rejected / manual.
+  Routes to manual immediately; no self-retry hop.
 
 ## Branch judgment
 

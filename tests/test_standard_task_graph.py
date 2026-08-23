@@ -11,6 +11,28 @@ from pathlib import Path
 
 import pytest
 
+from agentgraph_engine.constants import (
+    ATTEMPT_COUNT_KEY,
+    HALTED_AT_NODE_KEY,
+    HALTED_KEY,
+    HALT_MANUAL_REQUESTED,
+    HALT_REASON_KEY,
+    HALT_RETRIES_EXHAUSTED,
+    HALT_UNRECOGNIZED_RESULT,
+    IMPLEMENT_REQUIREMENTS_NODE,
+    ITEM_KEY,
+    OUTCOME_KEY,
+    OUTCOME_MANUAL_FLAG,
+    OUTCOME_SUCCESS,
+    RESULT_ACCEPT,
+    RESULT_IMPLEMENTED,
+    RESULT_REJECT,
+    RESULT_STOPPED,
+    RESULT_VERIFIED,
+    REVIEW_NODE,
+    ROUTE_KEY,
+    RUN_DIR_KEY,
+)
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 
 GRAPH_PATH = (
@@ -61,60 +83,60 @@ def _script_executor(steps):
 
 
 def test_verified_skips_review_and_reaches_success(monkeypatch, build_graph, tmp_path):
-    executor, calls = _script_executor([("Result: verified", True)])
+    executor, calls = _script_executor([(f"Result: {RESULT_VERIFIED}", True)])
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
     result = graph.invoke(
-        {"run_dir": str(tmp_path), "item": {"title": "t", "description": "d", "kind": "verify"}}
+        {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d", "kind": "verify"}}
     )
-    assert result["outcome"] == "success"
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert calls["n"] == 1  # review never dispatched
 
 
 def test_implemented_then_accepted_reaches_success(monkeypatch, build_graph, tmp_path):
     executor, calls = _script_executor(
-        [("Result: implemented", True), ("Result: accepted", True)]
+        [(f"Result: {RESULT_IMPLEMENTED}", True), (f"Result: {RESULT_ACCEPT}", True)]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
-    result = graph.invoke({"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}})
-    assert result["outcome"] == "success"
-    assert result["implement_attempt_count"] == 1
-    assert result["review_attempt_count"] == 1
+    result = graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}})
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert result[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 1
 
 
 def test_rejected_loops_back_under_three_attempts_then_succeeds(monkeypatch, build_graph, tmp_path):
     executor, calls = _script_executor(
         [
-            ("Result: implemented", True),
-            ("Result: rejected — needs fix", True),
-            ("Result: implemented", True),
-            ("Result: accepted", True),
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            (f"Result: {RESULT_REJECT} — needs fix", True),
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            (f"Result: {RESULT_ACCEPT}", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
     result = graph.invoke(
-        {"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}},
+        {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}},
         config={"recursion_limit": 50},
     )
-    assert result["outcome"] == "success"
-    assert result["implement_attempt_count"] == 2
-    assert result["review_attempt_count"] == 2
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert result[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 2
+    assert result[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 2
 
 
 def test_rejected_three_times_routes_to_manual_flag(monkeypatch, build_graph, tmp_path):
     executor, calls = _script_executor(
         [
-            ("Result: implemented", True),
-            ("Result: rejected — still bad", True),
-            ("Result: implemented", True),
-            ("Result: rejected — still bad", True),
-            ("Result: implemented", True),
-            ("Result: rejected — still bad", True),
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            (f"Result: {RESULT_REJECT} — still bad", True),
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            (f"Result: {RESULT_REJECT} — still bad", True),
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            (f"Result: {RESULT_REJECT} — still bad", True),
             ("manual flag summary\nResult: flagged", True),
         ]
     )
@@ -122,84 +144,78 @@ def test_rejected_three_times_routes_to_manual_flag(monkeypatch, build_graph, tm
 
     graph = build_graph()
     result = graph.invoke(
-        {"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}},
+        {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}},
         config={"recursion_limit": 50},
     )
-    assert result["outcome"] == "manual_flag"
-    assert result["implement_attempt_count"] == 3
+    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_FLAG
+    assert result[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 3
 
 
 def test_stopped_without_completing_routes_to_manual_flag(monkeypatch, build_graph, tmp_path):
     executor, calls = _script_executor(
         [
-            ("Result: stopped — missing capability", True),
+            (f"Result: {RESULT_STOPPED} — missing capability", True),
             ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
-    result = graph.invoke({"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}})
-    assert result["outcome"] == "manual_flag"
+    result = graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}})
+    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_FLAG
 
 
-def test_unrecognized_review_result_retries_review_then_falls_to_manual_flag(monkeypatch, build_graph, tmp_path):
-    """A `Result:` line that is neither the accept keyword ("accepted") nor the reject keyword
-    ("rejected") -- garbled/missing -- is a soft failure: it retries 03_review itself (bounded by
-    this gate's own self-retry budget, mirroring its `dispatch_with_retry(retry=1)`), NOT a
-    loop-back to 02_implement_requirements (the pre-fix bug: an unrecognized line used to fall
-    straight into the attempt-count check and silently loop back into rework).
+def test_unrecognized_review_result_goes_to_manual_immediately(monkeypatch, build_graph, tmp_path):
+    """A `Result:` line that is neither accepted, rejected, nor manual — garbled/missing —
+    routes to manual_flag immediately with halt_reason unrecognized_result. It does not retry
+    review and does not loop back to implement_requirements.
     """
     executor, calls = _script_executor(
         [
-            ("Result: implemented", True),  # implement_requirements
-            ("garbled nonsense, no keyword", True),  # review attempt 1 -> unrecognized -> self-retry
-            ("still garbled", True),  # review attempt 2 (self-retry) -> budget exhausted -> manual
-            ("manual flag summary\nResult: flagged", True),  # manual_flag
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            ("garbled nonsense, no keyword", True),
+            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
     result = graph.invoke(
-        {"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}},
+        {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}},
         config={"recursion_limit": 50},
     )
-    assert result["outcome"] == "manual_flag"
-    # implement_requirements was dispatched exactly once -- proof this never looped back to it.
-    assert result["implement_attempt_count"] == 1
-    # review itself was dispatched twice (the self-retry), never implement_requirements again.
-    assert result["review_attempt_count"] == 2
-    assert result["review_self_retry_count"] == 1
-    assert result["halted"] is True
-    assert result["halt_reason"] == "unrecognized_result_exhausted"
-    assert result["halted_at_node"] == "implement_requirements"
+    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_FLAG
+    assert result[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[REVIEW_NODE][ROUTE_KEY] == "manual"
+    assert result[REVIEW_NODE][HALT_REASON_KEY] == HALT_UNRECOGNIZED_RESULT
+    assert result[HALTED_KEY] is True
+    assert result[HALT_REASON_KEY] == HALT_UNRECOGNIZED_RESULT
+    assert result[HALTED_AT_NODE_KEY] == IMPLEMENT_REQUIREMENTS_NODE
+    assert calls["n"] == 3
 
 
 def test_manual_keyword_from_review_routes_immediately_to_manual_flag(monkeypatch, build_graph, tmp_path):
     """The reserved `manual` Result: keyword is an explicit human escape hatch: it routes
-    straight to manual_flag on the very first review dispatch, bypassing the attempt-count check
-    entirely (unlike a rejection, which only reaches manual_flag once attempts are exhausted).
+    straight to manual_flag on the very first review dispatch, bypassing the reject-loop budget.
     """
     executor, calls = _script_executor(
         [
-            ("Result: implemented", True),  # implement_requirements
-            ("Result: manual — needs a human judgment call", True),  # review -> explicit manual
-            ("manual flag summary\nResult: flagged", True),  # manual_flag
+            (f"Result: {RESULT_IMPLEMENTED}", True),
+            ("Result: manual — needs a human judgment call", True),
+            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
 
     graph = build_graph()
-    result = graph.invoke({"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}})
-    assert result["outcome"] == "manual_flag"
-    # Only one review dispatch -- the manual keyword bypassed the attempt-count check entirely,
-    # never retried review and never looped back to implement_requirements.
-    assert result["review_attempt_count"] == 1
-    assert result["implement_attempt_count"] == 1
-    assert result["halted"] is True
-    assert result["halt_reason"] == "manual_requested"
-    assert result["halted_at_node"] == "implement_requirements"
+    result = graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}})
+    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_FLAG
+    assert result[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[HALTED_KEY] is True
+    assert result[HALT_REASON_KEY] == HALT_MANUAL_REQUESTED
+    assert result[HALTED_AT_NODE_KEY] == IMPLEMENT_REQUIREMENTS_NODE
 
 
 def test_technical_failure_exhausting_retries_halts(monkeypatch, build_graph, tmp_path):
@@ -210,7 +226,7 @@ def test_technical_failure_exhausting_retries_halts(monkeypatch, build_graph, tm
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", always_fail)
 
     graph = build_graph()
-    result = graph.invoke({"run_dir": str(tmp_path), "item": {"title": "t", "description": "d"}})
-    assert result.get("halted") is True
-    assert result.get("halt_reason") == "retries_exhausted"
-    assert "outcome" not in result or result.get("outcome") is None
+    result = graph.invoke({RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}})
+    assert result.get(HALTED_KEY) is True
+    assert result.get(HALT_REASON_KEY) == HALT_RETRIES_EXHAUSTED
+    assert OUTCOME_KEY not in result or result.get(OUTCOME_KEY) is None

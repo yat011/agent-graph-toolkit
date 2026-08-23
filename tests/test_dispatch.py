@@ -6,6 +6,11 @@ A fake `executor` stands in for a real `claude -p` subprocess call — that's th
 pluggable seam (the "Executor"), not an implementation detail.
 """
 
+from agentgraph_engine.constants import (
+    MODEL_CHEAP,
+    ROLE_GENERAL_PURPOSE,
+)
+
 import subprocess
 from pathlib import Path
 
@@ -44,7 +49,7 @@ def make_executor(write_output: bool, returncode: int = 0, envelope: dict | None
 def test_dispatch_success_reads_result_line_from_output_file(tmp_path):
     output_path = tmp_path / "01_node" / "attempt-1" / "output.md"
     result = dispatch_worker(
-        role="general-purpose",
+        role=ROLE_GENERAL_PURPOSE,
         task_prompt="do the thing",
         output_path=output_path,
         executor=make_executor(write_output=True),
@@ -59,7 +64,7 @@ def test_dispatch_success_reads_result_line_from_output_file(tmp_path):
 def test_dispatch_missing_output_file_is_technical_failure(tmp_path):
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     result = dispatch_worker(
-        role="general-purpose",
+        role=ROLE_GENERAL_PURPOSE,
         task_prompt="do the thing",
         output_path=output_path,
         executor=make_executor(write_output=False),
@@ -71,7 +76,7 @@ def test_dispatch_missing_output_file_is_technical_failure(tmp_path):
 def test_dispatch_nonzero_exit_is_technical_failure_even_with_output(tmp_path):
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     result = dispatch_worker(
-        role="general-purpose",
+        role=ROLE_GENERAL_PURPOSE,
         task_prompt="do the thing",
         output_path=output_path,
         executor=make_executor(write_output=True, returncode=1),
@@ -90,7 +95,7 @@ def test_dispatch_falls_back_to_result_text_when_output_has_no_result_line(tmp_p
             argv, 0, stdout=json.dumps({"result": "closing line\nResult: from-chat"}), stderr=""
         )
 
-    result = dispatch_worker(role="general-purpose", task_prompt="x", output_path=output_path, executor=executor)
+    result = dispatch_worker(role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, executor=executor)
     assert result.ok is True
     assert result.result_line == "from-chat"
 
@@ -99,7 +104,7 @@ def test_dispatch_never_passes_resume_or_continue_flags(tmp_path):
     calls = []
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     dispatch_worker(
-        role="general-purpose", task_prompt="x", output_path=output_path,
+        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path,
         executor=make_executor(write_output=True, call_log=calls),
     )
     assert calls, "executor was not called"
@@ -118,7 +123,7 @@ def test_dispatch_model_cheap_alias_maps_to_haiku(tmp_path):
     calls = []
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     dispatch_worker(
-        role="general-purpose", task_prompt="x", output_path=output_path, model="cheap",
+        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, model=MODEL_CHEAP,
         executor=make_executor(write_output=True, call_log=calls),
     )
     argv = calls[0]
@@ -130,7 +135,7 @@ def test_dispatch_haiku_model_uses_accept_edits_with_write_allowlist(tmp_path):
     calls = []
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     dispatch_worker(
-        role="general-purpose", task_prompt="x", output_path=output_path, model="haiku",
+        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, model="haiku",
         executor=make_executor(write_output=True, call_log=calls),
     )
     argv = calls[0]
@@ -156,7 +161,7 @@ def test_dispatch_with_retry_stops_at_first_ok(tmp_path):
         return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
 
     result = dispatch_with_retry(
-        retry=2, role="general-purpose", task_prompt="x", output_path=output_path, executor=executor
+        retry=2, role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, executor=executor
     )
     assert result.ok is True
     assert calls["n"] == 2
@@ -171,7 +176,7 @@ def test_dispatch_with_retry_exhausts_and_returns_last_failure(tmp_path):
         return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
 
     result = dispatch_with_retry(
-        retry=2, role="general-purpose", task_prompt="x", output_path=output_path, executor=executor
+        retry=2, role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, executor=executor
     )
     assert result.ok is False
     assert calls["n"] == 3  # retry=2 -> 3 total attempts
@@ -191,7 +196,7 @@ def test_load_role_prompt_strips_frontmatter_for_real_role_file():
 
 
 def test_load_role_prompt_general_purpose_has_no_persona():
-    assert load_role_prompt("general-purpose") == ""
+    assert load_role_prompt(ROLE_GENERAL_PURPOSE) == ""
 
 
 def test_load_role_prompt_unknown_role_is_empty():

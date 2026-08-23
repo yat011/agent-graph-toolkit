@@ -1,13 +1,17 @@
 ---
 name: agentgraph-define-graph
-description: Use when the user wants to turn a written plan into an executable agent graph for review — e.g. "define a graph for this plan", "turn this plan into a graph", "break this plan into nodes". Reads a plan file, breaks it into nodes, writes agent_works/graphs/{graph-name}/graph.py, and iterates with the user until they confirm it. Does not execute the graph — that's a separate skill.
+description: Use when the user wants to turn a written plan into an executable agent graph for review — e.g. "define a graph for this plan", "turn this plan into a graph", "break this plan into nodes". Reads a plan file, breaks it into nodes, writes graph.py (project tier by default; user tier only when the user explicitly asks), and iterates with the user until they confirm it. Does not execute the graph — that's a separate skill.
 ---
 
 # agentgraph-define-graph
 
-Turns a written plan (`agent_works/plans/*.md`) into an `agent_works/graphs/{graph-name}/graph.py`
-file — plain, idiomatic LangGraph `StateGraph` Python code, never a hand-rolled builder DSL and
-never a markdown/YAML format — and iterates with the user on the design until they confirm it.
+Turns a written plan (`agent_works/plans/*.md`) into a `graph.py` file — plain, idiomatic
+LangGraph `StateGraph` Python code, never a hand-rolled builder DSL and never a markdown/YAML
+format — and iterates with the user on the design until they confirm it.
+
+`agentgraph-run-graph` resolves a graph by name in this order: **project**
+(`agent_works/graphs/{name}/graph.py`) **> user** (`~/.agents/graphs/{name}/graph.py`, via
+`Path.home()`) **> template** (`skills/agentgraph-run-graph/templates/{name}/graph.py`).
 
 **This skill only writes `graph.py`. It never calls `agentgraph-run-graph`, never invokes the
 `agentgraph` CLI to start a run, and never dispatches a Worker.** Defining a graph and running a
@@ -18,10 +22,11 @@ Before doing anything else, read `CONTEXT.md` (repo root) for this toolkit's glo
 Node, Worker, Executor, Run, Template graph) and `agentgraph_engine/dispatch.py`'s module
 docstring for the exact `dispatch_worker`/`dispatch_with_retry` signatures this skill's generated
 code must call — do not re-derive or duplicate either from memory. Reading the two shipped
-templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-task}/graph.py`) is
-the fastest way to see the idiom this skill must reproduce: a `TypedDict` state, one node function
-per unit of work, a router function per branching node, `build_graph(checkpointer=None)` compiling
-and returning the graph.
+templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-task}/`) is
+the fastest way to see the idiom this skill must reproduce: composed per-node `TypedDict` records
+from `agentgraph_engine.states`, one explicit node function per unit of work (in that template's
+`nodes.py`), a router function per branching node, `build_graph(checkpointer=None)` compiling
+and returning the graph. `graph.py` is wiring only — no node bodies or prompt-builders.
 
 ## Steps
 
@@ -40,12 +45,14 @@ and returning the graph.
 - Derive `{graph-name}` from the plan file's name (kebab-case, drop the extension and any
   redundant "plan" wording if it's already implied by context), e.g.
   `agent_works/plans/agent-graph-skills.md` → `agent-graph-skills`.
-- The file goes at `agent_works/graphs/{graph-name}/graph.py` — a **project graph**
-  (`agentgraph_engine.graph_loader`'s term for a graph a project authored for one specific plan,
-  as opposed to the two built-in **template graphs** shipped inside
-  `skills/agentgraph-run-graph/templates/`). `agentgraph-run-graph`'s CLI resolves a project graph
-  by this same name/path automatically — no registration step.
-- Check whether `agent_works/graphs/{graph-name}/graph.py` already exists:
+- **Default write target is the project tier:** `agent_works/graphs/{graph-name}/graph.py`.
+- **User-tier write is explicit-only.** Write to
+  `{Path.home()}/.agents/graphs/{graph-name}/graph.py` only when the user explicitly asks to save
+  a user graph (e.g. "save this as a user graph", "write this to my user graphs"). Never default
+  to the user tier. Never hardcode a personal home path; compute it with `Path.home()`.
+- `agentgraph-run-graph`'s CLI resolves the same name through project > user > template — no
+  registration step.
+- Check whether the chosen-tier `graph.py` already exists:
   - If it exists and the user is asking to redefine/update it, treat this as an edit to the
     existing graph (skip to step 5's loop directly).
   - If it exists and this looks like a fresh definition request for the same plan, ask the user
@@ -118,13 +125,18 @@ graph's own state.
 
 ### 4. Write graph.py
 
-Write `agent_works/graphs/{graph-name}/graph.py` as plain LangGraph code:
+Write `graph.py` at the path chosen in step 2 (project tier unless the user explicitly asked for
+a user graph) as plain LangGraph code:
 
-- A `TypedDict(..., total=False)` state class covering every field any node reads or writes,
-  including `halted: bool`, `halt_reason: Optional[str]`, `halted_at_node: Optional[str]` if any
-  node can halt, and `outcome: Optional[str]` for the graph's own terminal result.
+- Composed per-node state: a `TypedDict(..., total=False)` with graph-level fields (`run_dir`,
+  `halted`, `halt_reason`, `halted_at_node`, `outcome`) plus one nested record per node
+  (`attempt_count`, `result_line`, `output_path`; gates also have `route` / `halt_reason`).
+  Reuse `agentgraph_engine.states.base.BasicNodeState` / `GateNodeState` / `BaseGraphState` rather
+  than flat prefixed keys (`implement_attempt_count`, …). Each nested record is written by
+  exactly one node function.
 - One node function per node (dispatch nodes call `agentgraph_engine.dispatch.dispatch_with_retry`
-  — never hand-roll a `subprocess` call), one router function per branching node.
+  — never hand-roll a `subprocess` call), one router function per branching node. Do not
+  introduce a generic node factory.
 - `graph.add_node(...)` for every node (including a shared no-op `halted` node if any node can
   halt, wired to `END`), `graph.add_edge`/`graph.add_conditional_edges` for every transition,
   `graph.add_edge(START, ...)` for the entry node.
@@ -185,9 +197,9 @@ These carry over from the retired `graph.md` engine, translated to Python:
 - **Sticky-research convention for loop-back retries.** A rejection-driven loop-back (e.g. a review
   node routing back to the node it reviewed) is fixing specific flagged issues, not starting a
   fresh investigation. Have the looped-back node's prompt read its own immediately preceding
-  attempt's output first (both templates' `_implement_prompt`/`_planner_prompt` helpers show the
-  pattern: glob the node's own prior `attempt-*/output.md` files) and scope fresh investigation to
-  exactly what the rejection requires re-checking.
+  attempt's output first (both templates' `_implement_prompt`/`_planner_prompt` helpers in
+  `nodes.py` show the pattern: glob the node's own prior `attempt-*/output.md` files) and scope
+  fresh investigation to exactly what the rejection requires re-checking.
 - **No `capability_gap` halt category.** A failing/erroring `claude` CLI dispatch is an ordinary
   technical failure, subject to the node's own `retry` count, then `halt_reason:
   "retries_exhausted"` — never a separate judgment call, because there's no coordinating LLM
