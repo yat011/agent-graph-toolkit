@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
 from agentgraph_engine.constants import (
     ATTEMPT_COUNT_KEY,
-    BLOCKED_PLAN_REJECTED_NODE,
     CREATE_FEATURE_BRANCH_NODE,
     FINAL_REVIEW_NODE,
     HALTED_AT_NODE_KEY,
@@ -23,7 +24,6 @@ from agentgraph_engine.constants import (
     MANUAL,
     MAP_TASK_STATES_KEY,
     MODEL_CHEAP,
-    NEEDS_MANUAL_REVIEW_NODE,
     OUTCOME_BLOCKED,
     OUTCOME_KEY,
     OUTCOME_MANUAL_FLAG,
@@ -42,13 +42,12 @@ from agentgraph_engine.constants import (
     SPEC_PATH_KEY,
     STANDARD_TASK_MANUAL_FLAG_DIR,
     STANDARD_TASK_SUCCESS_DIR,
-    SUCCESS_NODE,
     TECH_PLAN_REVIEWER_NODE,
 )
-from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
+from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry, extract_result_line
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 from agentgraph_engine.routing import classify_gate
-from agentgraph_engine.runs import node_output_path
+from agentgraph_engine.runs import node_output_path, slugify
 from agentgraph_engine.states.feature_kickoff import FeatureKickoffState
 
 STANDARD_TASK_GRAPH_PATH = Path(__file__).resolve().parent.parent / "standard-task" / "graph.py"
@@ -73,30 +72,88 @@ def _next_attempt(state: dict, node_id: str) -> int:
     return int(_record(state, node_id).get(ATTEMPT_COUNT_KEY) or 0) + 1
 
 
-def _branch_prompt(state: FeatureKickoffState) -> str:
-    prompt = (
-        "Derive a short kebab-case slug from the spec's subject/title.\n"
-        "\n"
-        "Check the current branch name and `git status` first, before running any git command "
-        "that changes state: if the current branch is already feature/{slug}, treat it as already "
-        "done. Otherwise check for uncommitted changes outside agent_works/ — if anything is "
-        "uncommitted there, do not touch it or switch branches; write output.md explaining the "
-        "working tree is dirty and stop. Otherwise, if a branch named feature/{slug} already "
-        "exists, check it out (no -b); only use `git checkout -b feature/{slug}` when that branch "
-        "doesn't exist yet. Never force anything, never touch remotes.\n"
-        "\n"
-        "Write output.md containing: the spec file path, the derived slug, and the branch name. "
-        "End with a single-line `Result: branch ready` conclusion.\n"
+def _write_output_file(output_path: Path, body: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if not body.endswith("\n"):
+        body += "\n"
+    output_path.write_text(body, encoding="utf-8")
+
+
+def _run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
     )
-    if state.get(SPEC_PATH_KEY):
-        prompt += f"\nUse this spec path: {state[SPEC_PATH_KEY]}\n"
+
+
+def _resolve_spec_path(state: FeatureKickoffState) -> Optional[Path]:
+    given = state.get(SPEC_PATH_KEY)
+    if given:
+        return Path(given)
+    specs = Path("agent_works") / "specs"
+    if not specs.is_dir():
+        return None
+    files = [path for path in specs.glob("*.md") if path.is_file()]
+    if not files:
+        return None
+    return max(files, key=lambda path: path.stat().st_mtime)
+
+
+def _branch_slug(state: FeatureKickoffState) -> str:
+    spec = _resolve_spec_path(state)
+    if spec is not None:
+        return slugify(spec.stem)
+    return slugify(Path(state[RUN_DIR_KEY]).name)
+
+
+def _plan_artifact_paths(state: FeatureKickoffState) -> tuple[Path, Path]:
+    """Convention paths for the plan markdown and tasks JSON the planner writes."""
+    spec = _resolve_spec_path(state)
+    slug = _branch_slug(state)
+    if spec is not None:
+        plans_dir = spec.resolve().parent.parent / "plans"
     else:
-        prompt += (
-            "\nNo spec path was given — read the most recently modified file under "
-            "agent_works/specs/. If none exists, do not guess: write output.md stating no spec "
-            "was found and stop.\n"
+        plans_dir = Path("agent_works") / "plans"
+    return plans_dir / f"{slug}.md", plans_dir / f"{slug}.tasks.json"
+
+
+def _dirty_paths_outside_agent_works(porcelain: str) -> list[str]:
+    dirty: list[str] = []
+    for raw in porcelain.splitlines():
+        if len(raw) < 4:
+            continue
+        path = raw[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if path.startswith("agent_works/") or path == "agent_works":
+            continue
+        dirty.append(path)
+    return dirty
+
+
+def _git_or_halt(
+    record: dict,
+    output_path: Path,
+    args: list[str],
+) -> subprocess.CompletedProcess[str] | dict:
+    try:
+        proc = _run_git(args)
+    except FileNotFoundError:
+        _write_output_file(
+            output_path,
+            "git is not on PATH.\n\nResult: manual — git is not on PATH\n",
         )
-    return prompt
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        return {
+            CREATE_FEATURE_BRANCH_NODE: record,
+            HALTED_KEY: True,
+            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
+            HALTED_AT_NODE_KEY: CREATE_FEATURE_BRANCH_NODE,
+        }
+    return proc
 
 
 def create_feature_branch(state: FeatureKickoffState) -> dict:
@@ -104,34 +161,118 @@ def create_feature_branch(state: FeatureKickoffState) -> dict:
     attempt = _next_attempt(state, CREATE_FEATURE_BRANCH_NODE)
     output_path = node_output_path(run_dir, BRANCH_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
-    result = dispatch_with_retry(
-        retry=1,
-        role=ROLE_GENERAL_PURPOSE,
-        task_prompt=_branch_prompt(state),
-        output_path=output_path,
-        model=MODEL_CHEAP,
-    )
-    attach_usage(record, result)
-    if not result.ok:
+    spec = _resolve_spec_path(state)
+    slug = _branch_slug(state)
+    branch = f"feature/{slug}"
+    spec_display = str(spec) if spec is not None else "(no spec path)"
+
+    head = _git_or_halt(record, output_path, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if isinstance(head, dict):
+        return head
+    if head.returncode != 0:
+        _write_output_file(
+            output_path,
+            (
+                f"Spec: {spec_display}\n"
+                f"Slug: {slug}\n"
+                f"Branch: {branch}\n\n"
+                "Not a git repository (or git rev-parse failed).\n\n"
+                "Result: manual — not a git repository\n"
+            ),
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
         return {
             CREATE_FEATURE_BRANCH_NODE: record,
             HALTED_KEY: True,
             HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
             HALTED_AT_NODE_KEY: CREATE_FEATURE_BRANCH_NODE,
         }
-    record[RESULT_KEY] = result.result_line
+    current = (head.stdout or "").strip()
+    if current == branch:
+        _write_output_file(
+            output_path,
+            (
+                f"Spec: {spec_display}\n"
+                f"Slug: {slug}\n"
+                f"Branch: {branch}\n\n"
+                "Already on this branch.\n\n"
+                "Result: branch ready\n"
+            ),
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        return {CREATE_FEATURE_BRANCH_NODE: record}
+
+    status = _git_or_halt(record, output_path, ["status", "--porcelain"])
+    if isinstance(status, dict):
+        return status
+    dirty = _dirty_paths_outside_agent_works(status.stdout or "")
+    if dirty:
+        listed = ", ".join(dirty)
+        _write_output_file(
+            output_path,
+            (
+                f"Spec: {spec_display}\n"
+                f"Slug: {slug}\n"
+                f"Branch: {branch}\n\n"
+                "Working tree is dirty outside agent_works/; did not switch branches. "
+                f"Dirty paths: {listed}\n\n"
+                "Result: working tree dirty — uncommitted changes outside agent_works/\n"
+            ),
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        return {CREATE_FEATURE_BRANCH_NODE: record}
+
+    exists = _git_or_halt(
+        record, output_path, ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"]
+    )
+    if isinstance(exists, dict):
+        return exists
+    checkout_args = ["checkout", branch] if exists.returncode == 0 else ["checkout", "-b", branch]
+    checkout = _git_or_halt(record, output_path, checkout_args)
+    if isinstance(checkout, dict):
+        return checkout
+    if checkout.returncode != 0:
+        err = (checkout.stderr or checkout.stdout or "git checkout failed").strip()
+        _write_output_file(
+            output_path,
+            (
+                f"Spec: {spec_display}\n"
+                f"Slug: {slug}\n"
+                f"Branch: {branch}\n\n"
+                f"{err}\n\n"
+                "Result: manual — git checkout failed\n"
+            ),
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        return {
+            CREATE_FEATURE_BRANCH_NODE: record,
+            HALTED_KEY: True,
+            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
+            HALTED_AT_NODE_KEY: CREATE_FEATURE_BRANCH_NODE,
+        }
+
+    _write_output_file(
+        output_path,
+        (
+            f"Spec: {spec_display}\n"
+            f"Slug: {slug}\n"
+            f"Branch: {branch}\n\n"
+            "Result: branch ready\n"
+        ),
+    )
+    record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
     return {CREATE_FEATURE_BRANCH_NODE: record}
 
 
 def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> str:
+    plan_md, tasks_json = _plan_artifact_paths(state)
+    spec = _resolve_spec_path(state)
     prompt = (
-        "Write the tech plan under agent_works/plans/{feature-slug}.md "
-        "(starting with a `Spec: agent_works/specs/{slug}.md` line) and the same task list as "
-        "machine-readable JSON at agent_works/plans/{feature-slug}.tasks.json "
-        "(id, title, description, test_cases, dependencies, optional test_scope).\n"
+        "Write the tech plan (starting with a `Spec:` line naming the spec file) and the same "
+        "task list as machine-readable JSON (id, title, description, test_cases, dependencies, "
+        "optional test_scope) at the paths in the suffix.\n"
         "\n"
-        "End output.md with the plan file path and the tasks JSON file path, each on their own "
-        "line, then a single-line `Result: plan written` conclusion.\n"
+        "End output.md with a single-line `Result: plan written`.\n"
     )
     if attempt > 1:
         reviewer_dir = run_dir / TECH_REVIEW_NODE_DIR
@@ -145,6 +286,12 @@ def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> 
                     "established as still valid unless the rejection specifically contradicts "
                     "them).\n"
                 )
+    spec_display = str(spec) if spec is not None else "(none)"
+    prompt += (
+        f"\nSpec: {spec_display}\n"
+        f"Plan: {plan_md}\n"
+        f"Tasks JSON: {tasks_json}\n"
+    )
     return prompt
 
 
@@ -172,20 +319,25 @@ def planner(state: FeatureKickoffState) -> dict:
 
 
 def _tech_review_prompt(state: FeatureKickoffState) -> str:
+    plan_md, tasks_json = _plan_artifact_paths(state)
+    spec = _resolve_spec_path(state)
+    spec_display = str(spec) if spec is not None else "(none)"
     prompt = (
         "Review the plan and tasks (not the spec's own decisions).\n"
         "\n"
-        "End output.md with your standard `Verdict: accepted` / `Verdict: rejected — <reason>` "
-        "conclusion, then restate it as this graph's `Result:` line: exactly "
-        f"`Result: {RESULT_ACCEPT}`, `Result: {RESULT_REJECT} — <reason>`, or — only if you "
-        "judge this situation needs a human right now rather than another automatic attempt — "
+        "On reject, list each failure as a bullet: reason, then a pointer "
+        "(plan section, task id, or file:line).\n"
+        "On accept, write only the Result line.\n"
+        "\n"
+        f"End output.md with `Result: {RESULT_ACCEPT}`, "
+        f"`Result: {RESULT_REJECT} — <reason>`, or — only if you judge this situation needs a "
+        f"human right now rather than another automatic attempt — "
         f"`Result: {RESULT_MANUAL} — <reason>`.\n"
     )
-    plan_output_path = _record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY)
     prompt += (
-        "\nRead 02_planner's latest output.md for the plan file path and tasks JSON file path, "
-        "then read both in full, plus the spec they reference.\n"
-        f"Planner output.md: {plan_output_path}\n"
+        f"\nSpec: {spec_display}\n"
+        f"Plan: {plan_md}\n"
+        f"Tasks JSON: {tasks_json}\n"
     )
     return prompt
 
@@ -217,9 +369,7 @@ def tech_plan_reviewer(state: FeatureKickoffState) -> dict:
 
 
 def _parse_plan_output_paths(plan_output_path: Optional[str]) -> Optional[str]:
-    """02_planner's output.md ends with the plan path and tasks JSON path, each on their own
-    line, then a Result: line — the tasks JSON path is the last line ending in `.tasks.json`.
-    """
+    """Fallback: last `.tasks.json` path mentioned in 02_planner's output.md, if any."""
     if not plan_output_path or not Path(plan_output_path).exists():
         return None
     lines = [line.strip() for line in Path(plan_output_path).read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -227,22 +377,21 @@ def _parse_plan_output_paths(plan_output_path: Optional[str]) -> Optional[str]:
     return candidates[-1] if candidates else None
 
 
-def _load_tasks_prompt(state: FeatureKickoffState) -> str:
-    prompt = (
-        "Verify the project's build/test environment is working once, for the whole batch. "
-        "If it is not working, do not attempt to load the task list — end output.md with "
-        f"`Result: {RESULT_MANUAL} — environment not working` and stop.\n"
-        "\n"
-        "If working, read 02_planner's latest output.md for the tasks JSON file path, and read "
-        "that JSON file. Write the task list to items.json in this node's attempt folder as a "
-        "JSON array (copied verbatim).\n"
-        "\n"
-        "End output.md with a one-line summary of how many tasks were loaded, then a single-line "
-        f"`Result: {RESULT_ACCEPT}` conclusion.\n"
-    )
-    plan_output_path = _record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY)
-    prompt += f"\nPlanner output.md: {plan_output_path}\n"
-    return prompt
+def _resolve_tasks_json_path(state: FeatureKickoffState) -> Optional[str]:
+    _plan_md, tasks_json = _plan_artifact_paths(state)
+    if tasks_json.is_file():
+        return str(tasks_json)
+    return _parse_plan_output_paths(_record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY))
+
+
+def _js_env_reason(items: list) -> Optional[str]:
+    """If any task looks like JS/TS work, node must be on PATH."""
+    blob = json.dumps(items)
+    if ".js" not in blob and ".mjs" not in blob and ".ts" not in blob:
+        return None
+    if shutil.which("node") is None:
+        return "environment not working — node is not on PATH"
+    return None
 
 
 def load_tasks(state: FeatureKickoffState) -> dict:
@@ -252,37 +401,63 @@ def load_tasks(state: FeatureKickoffState) -> dict:
     attempt = _next_attempt(state, LOAD_TASKS_NODE)
     output_path = node_output_path(run_dir, LOAD_TASKS_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path), ITEMS_KEY: []}
-    result = dispatch_with_retry(
-        retry=1,
-        role=ROLE_GENERAL_PURPOSE,
-        task_prompt=_load_tasks_prompt(state),
-        output_path=output_path,
-        model=MODEL_CHEAP,
+    tasks_json_path = _resolve_tasks_json_path(state)
+
+    if not tasks_json_path or not Path(tasks_json_path).exists():
+        reason = "could not load tasks — no readable .tasks.json at the expected plan path"
+        _write_output_file(
+            output_path,
+            f"{reason}\n\nResult: {RESULT_MANUAL} — {reason}\n",
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        record.update(classify_gate({**state, LOAD_TASKS_NODE: record}, LOAD_TASKS_GATE, LOAD_TASKS_NODE))
+        return {LOAD_TASKS_NODE: record}
+
+    raw = Path(tasks_json_path).read_text(encoding="utf-8")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        reason = f"could not load tasks — invalid JSON ({exc.msg})"
+        _write_output_file(
+            output_path,
+            f"{reason}\n\nResult: {RESULT_MANUAL} — {reason}\n",
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        record.update(classify_gate({**state, LOAD_TASKS_NODE: record}, LOAD_TASKS_GATE, LOAD_TASKS_NODE))
+        return {LOAD_TASKS_NODE: record}
+
+    if not isinstance(parsed, list):
+        reason = "could not load tasks — tasks JSON is not an array"
+        _write_output_file(
+            output_path,
+            f"{reason}\n\nResult: {RESULT_MANUAL} — {reason}\n",
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        record.update(classify_gate({**state, LOAD_TASKS_NODE: record}, LOAD_TASKS_GATE, LOAD_TASKS_NODE))
+        return {LOAD_TASKS_NODE: record}
+
+    env_reason = _js_env_reason(parsed)
+    if env_reason:
+        _write_output_file(
+            output_path,
+            f"{env_reason}\n\nResult: {RESULT_MANUAL} — {env_reason}\n",
+        )
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+        record.update(classify_gate({**state, LOAD_TASKS_NODE: record}, LOAD_TASKS_GATE, LOAD_TASKS_NODE))
+        return {LOAD_TASKS_NODE: record}
+
+    items_path = output_path.parent / "items.json"
+    items_path.parent.mkdir(parents=True, exist_ok=True)
+    items_path.write_text(raw, encoding="utf-8")
+    _write_output_file(
+        output_path,
+        (
+            f"Loaded {len(parsed)} task(s) from {tasks_json_path}\n\n"
+            f"Result: {RESULT_ACCEPT}\n"
+        ),
     )
-    attach_usage(record, result)
-    if not result.ok:
-        return {
-            LOAD_TASKS_NODE: record,
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: LOAD_TASKS_NODE,
-        }
-
-    items: list = []
-    line = (result.result_line or "").strip()
-    if line.startswith(RESULT_ACCEPT):
-        items_path = output_path.parent / "items.json"
-        if not items_path.exists():
-            tasks_json_path = _parse_plan_output_paths(_record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY))
-            if tasks_json_path and Path(tasks_json_path).exists():
-                items = json.loads(Path(tasks_json_path).read_text(encoding="utf-8"))
-                items_path.parent.mkdir(parents=True, exist_ok=True)
-                items_path.write_text(Path(tasks_json_path).read_text(encoding="utf-8"), encoding="utf-8")
-        else:
-            items = json.loads(items_path.read_text(encoding="utf-8"))
-
-    record[RESULT_KEY] = result.result_line
-    record[ITEMS_KEY] = items
+    record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
+    record[ITEMS_KEY] = parsed
     record.update(classify_gate({**state, LOAD_TASKS_NODE: record}, LOAD_TASKS_GATE, LOAD_TASKS_NODE))
     return {LOAD_TASKS_NODE: record}
 
@@ -381,8 +556,9 @@ def _final_review_prompt(state: FeatureKickoffState) -> str:
         "Two-hop graph tests that only import a wrapper (e.g. test_feature_kickoff_graph importing "
         "graph.py not the changed module) are OUT.\n"
         "\n"
-        "End output.md with a per-task checklist, the test run summary, and a single-line "
-        f"`Result: {RESULT_ACCEPT}` or `Result: {RESULT_MANUAL} — <short reason>` conclusion.\n"
+        "End output.md with the test command you ran, pass or fail (with counts if available), "
+        f"and a single-line `Result: {RESULT_ACCEPT}` or "
+        f"`Result: {RESULT_MANUAL} — <short reason>` conclusion.\n"
     )
     child_states = state.get(MAP_TASK_STATES_KEY) or []
     checklist = "\n".join(
@@ -424,25 +600,38 @@ def final_review(state: FeatureKickoffState) -> dict:
     return {FINAL_REVIEW_NODE: record}
 
 
+def _attempt_outputs(run_dir: Path, node_dir: str) -> list[Path]:
+    folder = run_dir / node_dir
+    if not folder.exists():
+        return []
+    return sorted(folder.glob("attempt-*/output.md"))
+
+
+def _output_excerpt(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    line = extract_result_line(text)
+    if line:
+        return f"{path}: Result: {line}"
+    tail = text.strip()[-500:] if text.strip() else "(empty)"
+    return f"{path}:\n{tail}"
+
+
 def blocked_plan_rejected(state: FeatureKickoffState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, BLOCKED_NODE_DIR, 1)
-    prompt = (
-        "The plan/task-list review loop exhausted 3 attempts without reaching approval. "
-        "Read every 02_planner and 03_tech_plan_reviewer attempt's output.md in this run's "
-        "folder. Write output.md summarizing the latest plan/tasks paths and the unresolved "
-        "rejection reasons so a human can take over. "
-        f"End with `Result: {OUTCOME_BLOCKED}`.\n"
+    excerpts = [
+        _output_excerpt(path)
+        for path in (
+            *_attempt_outputs(run_dir, PLANNER_NODE_DIR),
+            *_attempt_outputs(run_dir, TECH_REVIEW_NODE_DIR),
+        )
+    ]
+    body = (
+        "Plan/task-list review loop did not reach approval.\n\n"
+        + ("\n".join(excerpts) if excerpts else "(no planner/reviewer outputs found)")
+        + f"\n\nResult: {OUTCOME_BLOCKED}\n"
     )
-    result = dispatch_with_retry(
-        retry=0, role=ROLE_GENERAL_PURPOSE, task_prompt=prompt, output_path=output_path, model=MODEL_CHEAP
-    )
-    if not result.ok:
-        return {
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: BLOCKED_PLAN_REJECTED_NODE,
-        }
+    _write_output_file(output_path, body)
     return {
         OUTCOME_KEY: OUTCOME_BLOCKED,
         HALTED_KEY: True,
@@ -454,21 +643,18 @@ def blocked_plan_rejected(state: FeatureKickoffState) -> dict:
 def needs_manual_review(state: FeatureKickoffState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, MANUAL_REVIEW_NODE_DIR, 1)
-    prompt = (
-        "This run needs manual attention — reachable either from 04_load_tasks (environment "
-        "down) or 06_final_review (issues found). Read whichever of those (and per-item outputs "
-        "under 05_run_tasks) exist and write output.md summarizing why. "
-        "End with `Result: manual review needed`.\n"
+    paths = [
+        *_attempt_outputs(run_dir, LOAD_TASKS_NODE_DIR),
+        *_attempt_outputs(run_dir, FINAL_REVIEW_NODE_DIR),
+        *sorted(run_dir.glob("05_run_tasks/**/output.md")),
+    ]
+    excerpts = [_output_excerpt(path) for path in paths]
+    body = (
+        "This run needs manual attention.\n\n"
+        + ("\n".join(excerpts) if excerpts else "(no prior node outputs found)")
+        + "\n\nResult: manual review needed\n"
     )
-    result = dispatch_with_retry(
-        retry=0, role=ROLE_GENERAL_PURPOSE, task_prompt=prompt, output_path=output_path, model=MODEL_CHEAP
-    )
-    if not result.ok:
-        return {
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: NEEDS_MANUAL_REVIEW_NODE,
-        }
+    _write_output_file(output_path, body)
     if _record(state, FINAL_REVIEW_NODE).get(ROUTE_KEY) == MANUAL:
         redrive_node = FINAL_REVIEW_NODE
         reason = _record(state, FINAL_REVIEW_NODE).get(HALT_REASON_KEY, HALT_MANUAL_REVIEW_NEEDED)
@@ -486,15 +672,24 @@ def needs_manual_review(state: FeatureKickoffState) -> dict:
 def success(state: FeatureKickoffState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, SUCCESS_NODE_DIR, 1)
-    prompt = (
-        "Write a Recap a human can read without opening the rest of the run: what shipped, "
-        "the suite result, links to spec/plan/tasks JSON, and any follow-up docs. "
-        "End with `Result: recap written`.\n"
+    spec = state.get(SPEC_PATH_KEY) or "(no spec path)"
+    plan_output = _record(state, PLANNER_NODE).get(OUTPUT_PATH_KEY) or "(no planner output)"
+    items = _record(state, LOAD_TASKS_NODE).get(ITEMS_KEY) or []
+    child_states = state.get(MAP_TASK_STATES_KEY) or []
+    checklist = "\n".join(
+        f"- {(child.get(ITEM_KEY) or {}).get('id')} "
+        f"({(child.get(ITEM_KEY) or {}).get('title')}): {child.get(OUTCOME_KEY)}"
+        for child in child_states
+    ) or "(no tasks)"
+    _write_output_file(
+        output_path,
+        (
+            f"Spec: {spec}\n"
+            f"Planner output: {plan_output}\n"
+            f"Tasks loaded: {len(items)}\n\n"
+            f"Per-task outcomes:\n{checklist}\n\n"
+            "Result: recap written\n"
+        ),
     )
-    result = dispatch_with_retry(
-        retry=0, role=ROLE_GENERAL_PURPOSE, task_prompt=prompt, output_path=output_path, model=MODEL_CHEAP
-    )
-    if not result.ok:
-        return {HALTED_KEY: True, HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED, HALTED_AT_NODE_KEY: SUCCESS_NODE}
     return {OUTCOME_KEY: OUTCOME_SUCCESS}
 

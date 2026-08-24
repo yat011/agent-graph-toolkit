@@ -14,8 +14,6 @@ from agentgraph_engine.constants import (
     IMPLEMENT_REQUIREMENTS_NODE,
     ITEM_KEY,
     MANUAL,
-    MANUAL_FLAG_NODE,
-    MODEL_CHEAP,
     OUTCOME_KEY,
     OUTCOME_MANUAL_FLAG,
     OUTCOME_SUCCESS,
@@ -27,7 +25,6 @@ from agentgraph_engine.constants import (
     RESULT_REJECT,
     RESULT_STOPPED,
     REVIEW_NODE,
-    ROLE_GENERAL_PURPOSE,
     ROUTE_KEY,
     RUN_DIR_KEY,
     STANDARD_TASK_MANUAL_FLAG_DIR,
@@ -121,7 +118,10 @@ def _review_prompt(run_dir: Path) -> str:
         "run's folder — open the rest only if that line is missing or the verdict is unclear — "
         "plus `git status`/`git diff` of product files this task owns.\n"
         "\n"
-        f"Accept or reject. End output.md with a single-line `Result: {RESULT_ACCEPT}` or "
+        "On reject, list each failure as a bullet: reason, then a pointer (file:line).\n"
+        "On accept, write only the Result line.\n"
+        "\n"
+        f"End output.md with a single-line `Result: {RESULT_ACCEPT}` or "
         f"`Result: {RESULT_REJECT} — <short reason>` conclusion — or, only if you judge this "
         "situation needs a human right now rather than another automatic attempt, "
         f"`Result: {RESULT_MANUAL} — <reason>`.\n"
@@ -132,17 +132,6 @@ def _review_prompt(run_dir: Path) -> str:
     )
     prompt += f"\nImplement output.md: {latest_display}\n"
     return prompt
-
-
-def _manual_flag_prompt() -> str:
-    return (
-        "This run needs manual attention. Read whichever of "
-        f"{IMPLEMENT_NODE_DIR}/attempt-*/output.md and {REVIEW_NODE_DIR}/attempt-*/output.md "
-        "exist in this run's folder. Write output.md summarizing why the run couldn't complete "
-        "automatically and what a human should check next. Also save this summary as a manual "
-        "follow-up checklist under agent_works/manual_actions/, if this project uses that "
-        "convention.\n"
-    )
 
 
 def implement_requirements(state: StandardTaskState) -> dict:
@@ -209,20 +198,8 @@ def success(state: StandardTaskState) -> dict:
 def manual_flag(state: StandardTaskState) -> dict:
     run_dir = Path(state[RUN_DIR_KEY])
     output_path = node_output_path(run_dir, MANUAL_FLAG_NODE_DIR, 1)
-    result = dispatch_with_retry(
-        retry=0,
-        role=ROLE_GENERAL_PURPOSE,
-        task_prompt=_manual_flag_prompt(),
-        output_path=output_path,
-        model=MODEL_CHEAP,
-    )
-    if not result.ok:
-        return {
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: MANUAL_FLAG_NODE,
-            OUTCOME_KEY: OUTCOME_MANUAL_FLAG,
-        }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("Result: flagged\n", encoding="utf-8")
     review_record = _record(state, REVIEW_NODE)
     if review_record.get(ROUTE_KEY) == MANUAL:
         return {

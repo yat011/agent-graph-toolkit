@@ -5,7 +5,7 @@ returned fields into that gate's own nested state record. The paired `route_afte
 conditional-edge function calls `gate_route` and stays a pure "read state, pick a target string"
 function — no side effects, no re-classification.
 
-Classification, in order:
+Classification, in order (keyword match is case-insensitive via matches_result_keyword):
   1. Result: line starts with RESULT_ACCEPT -> ACCEPT
   2. Result: line starts with RESULT_MANUAL -> MANUAL (halt_reason: manual_requested)
   3. Result: line starts with RESULT_REJECT and retry_target is set ->
@@ -56,6 +56,11 @@ def _record(state: dict, node_id: str | None) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def matches_result_keyword(line: str, keyword: str) -> bool:
+    """True if `line` starts with `keyword`, compared case-insensitively after strip."""
+    return line.strip().casefold().startswith(keyword.strip().casefold())
+
+
 def classify_gate(state: dict, config: GateConfig, self_node: str) -> dict:
     """Classify one gate's `Result:` line.
 
@@ -64,13 +69,13 @@ def classify_gate(state: dict, config: GateConfig, self_node: str) -> dict:
     """
     line = (_record(state, self_node).get(RESULT_KEY) or "").strip()
 
-    if line.startswith(RESULT_ACCEPT):
+    if matches_result_keyword(line, RESULT_ACCEPT):
         return {ROUTE_KEY: ACCEPT}
 
-    if line.startswith(RESULT_MANUAL):
+    if matches_result_keyword(line, RESULT_MANUAL):
         return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_MANUAL_REQUESTED}
 
-    if config.retry_target is not None and line.startswith(RESULT_REJECT):
+    if config.retry_target is not None and matches_result_keyword(line, RESULT_REJECT):
         attempts = _record(state, config.retry_target).get(ATTEMPT_COUNT_KEY, 0)
         if config.max_retry_attempts is not None and attempts >= config.max_retry_attempts:
             return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_REJECT_ATTEMPTS_EXHAUSTED}

@@ -23,22 +23,22 @@ A task with *no* stated test case, or whose only stated case contradicts the spe
 
 Only flag issues that would cause real problems during implementation. An implementer building the wrong thing or getting stuck is an issue. Minor wording, stylistic preferences, and "nice to have" suggestions are not.
 
-If you genuinely find no issue in a given category after looking, say so explicitly rather than inventing minor findings.
+If you genuinely find no issue after looking, write only the Result line rather than inventing minor findings.
 
 ## Report
 
-Cite findings by plan section / task id, ranked most-severe first.
+Each failure is a bullet: reason, then a pointer (plan section, task id, or file:line), ranked most-severe first.
 
-End the report with a single-line verdict, exactly one of:
+End with a single-line Result, exactly one of:
 
 ```
-Verdict: accepted
+Result: accepted
 ```
 
 or
 
 ```
-Verdict: rejected — <one-line reason summary>
+Result: rejected — <one-line reason summary>
 ```
 
 Reject only for serious gaps: missing spec requirements, a plan/task-list claim that contradicts the spec, contradictory steps, placeholder content, tasks so vague they cannot be acted on, or a tasks JSON that does not match the plan. Everything else — incomplete test-case enumeration, missing edge-case detail, phrasing an implementer could reasonably resolve while building — goes in the report as a non-blocking note, never a reject.

@@ -45,4 +45,5 @@ revisions made in response to reviewer feedback).
 
 ## Final report
 
-Report back: the plan file path and the tasks JSON file path.
+The plan markdown and tasks JSON files are the deliverable. output.md is a single
+`Result: plan written` line.

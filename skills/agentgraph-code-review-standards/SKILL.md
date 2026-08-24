@@ -13,10 +13,10 @@ the full tracker-based workflow this project doesn't use.
 
 ## Two axes, reported separately
 
-Judge every review along two independent axes and report them under separate headings — never
+Judge every review along two independent axes. Tag each finding `Standards` or `Spec` — never
 merge or rerank findings across them. A change can pass one and fail the other: code that follows
 every convention but implements the wrong thing, or code that does exactly what was asked but
-breaks a project convention.
+breaks a project convention. An axis with no findings is omitted.
 
 - **Standards** — does the diff follow this repo's documented conventions (its own CLAUDE.md or
   equivalent: SOLID/DRY, no duplicate code, no defensive null checks, whatever file/language
@@ -51,5 +51,6 @@ enforces:
 - Tests that would still pass if the spec's requirement were violated (loosened assertions,
   widened tolerances, missing coverage for a stated requirement) — a real finding, not a nitpick.
 
-Quote the spec/plan line for each Spec finding, and cite file:line (plus the smell name, if
-applicable) for each Standards finding.
+Point at the spec/plan location (section or heading) for each Spec finding, and file:line (plus
+the smell name, if applicable) for each Standards finding. Each finding is a bullet: reason, then
+that pointer.

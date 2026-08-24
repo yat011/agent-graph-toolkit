@@ -52,6 +52,34 @@ def make_executor(write_output: bool, returncode: int = 0, envelope: dict | None
     return executor
 
 
+def test_dispatch_prompt_sets_caveman_full_output_voice(tmp_path):
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+    captured: dict[str, str] = {}
+
+    def executor(argv, input_text, timeout):
+        captured["text"] = input_text
+        marker = "Write your full output to this exact file path before finishing: "
+        path_line = next(line for line in input_text.splitlines() if line.startswith(marker))
+        out_path = Path(path_line[len(marker) :].strip())
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("Result: done\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
+
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
+    assert result.ok is True
+    text = captured["text"]
+    assert "caveman full" in text
+    assert "Keep Result: line" in text
+    assert text.index("caveman full") < text.index(
+        "Write your full output to this exact file path before finishing:"
+    )
+
+
 def test_dispatch_success_reads_result_line_from_output_file(tmp_path):
     output_path = tmp_path / "01_node" / "attempt-1" / "output.md"
     result = dispatch_worker(
@@ -194,6 +222,12 @@ def test_extract_result_line_takes_last_match_and_strips_prefix():
     assert extract_result_line("Result: a\nResult: rejected - x") == "rejected - x"
     assert extract_result_line("no result here") is None
     assert extract_result_line(None) is None
+
+
+def test_extract_result_line_heading_and_case():
+    assert extract_result_line("## Result: ACCEPTED\n") == "ACCEPTED"
+    assert extract_result_line("RESULT: accepted\n") == "accepted"
+    assert extract_result_line("- Result: not a heading\n") is None
 
 
 def test_load_role_prompt_strips_frontmatter_for_real_role_file():

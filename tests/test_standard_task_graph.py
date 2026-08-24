@@ -87,7 +87,6 @@ def test_verified_result_does_not_skip_review(monkeypatch, build_graph, tmp_path
     executor, calls = _script_executor(
         [
             ("Result: verified", True),
-            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
@@ -98,6 +97,8 @@ def test_verified_result_does_not_skip_review(monkeypatch, build_graph, tmp_path
     )
     assert result[OUTCOME_KEY] == OUTCOME_MANUAL_FLAG
     assert REVIEW_NODE not in result or not (result.get(REVIEW_NODE) or {}).get(ATTEMPT_COUNT_KEY)
+    flagged = tmp_path / "05_manual_flag" / "attempt-1" / "output.md"
+    assert flagged.read_text(encoding="utf-8") == "Result: flagged\n"
 
 
 def test_implemented_prompt_puts_item_fields_in_suffix(monkeypatch, build_graph, tmp_path):
@@ -173,7 +174,6 @@ def test_rejected_three_times_routes_to_manual_flag(monkeypatch, build_graph, tm
             (f"Result: {RESULT_REJECT} — still bad", True),
             (f"Result: {RESULT_IMPLEMENTED}", True),
             (f"Result: {RESULT_REJECT} — still bad", True),
-            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
@@ -191,7 +191,6 @@ def test_stopped_without_completing_routes_to_manual_flag(monkeypatch, build_gra
     executor, calls = _script_executor(
         [
             (f"Result: {RESULT_STOPPED} — missing capability", True),
-            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
@@ -210,7 +209,6 @@ def test_unrecognized_review_result_goes_to_manual_immediately(monkeypatch, buil
         [
             (f"Result: {RESULT_IMPLEMENTED}", True),
             ("garbled nonsense, no keyword", True),
-            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
@@ -228,7 +226,7 @@ def test_unrecognized_review_result_goes_to_manual_immediately(monkeypatch, buil
     assert result[HALTED_KEY] is True
     assert result[HALT_REASON_KEY] == HALT_UNRECOGNIZED_RESULT
     assert result[HALTED_AT_NODE_KEY] == IMPLEMENT_REQUIREMENTS_NODE
-    assert calls["n"] == 3
+    assert calls["n"] == 2
 
 
 def test_manual_keyword_from_review_routes_immediately_to_manual_flag(monkeypatch, build_graph, tmp_path):
@@ -239,7 +237,6 @@ def test_manual_keyword_from_review_routes_immediately_to_manual_flag(monkeypatc
         [
             (f"Result: {RESULT_IMPLEMENTED}", True),
             ("Result: manual — needs a human judgment call", True),
-            ("manual flag summary\nResult: flagged", True),
         ]
     )
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)

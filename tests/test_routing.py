@@ -19,7 +19,7 @@ from agentgraph_engine.constants import (
     ROUTE_KEY,
     SUCCESS_NODE,
 )
-from agentgraph_engine.routing import GateConfig, classify_gate, gate_route
+from agentgraph_engine.routing import GateConfig, classify_gate, gate_route, matches_result_keyword
 
 REVIEW_GATE = GateConfig(
     retry_target=IMPLEMENT_REQUIREMENTS_NODE,
@@ -91,3 +91,16 @@ def test_classify_gate_manual_keyword_constant_matches_result_manual():
     assert RESULT_MANUAL == "manual"
     state = {REVIEW_NODE: {RESULT_KEY: RESULT_MANUAL}}
     assert classify_gate(state, REVIEW_GATE, REVIEW_NODE)[ROUTE_KEY] == MANUAL
+
+
+def test_matches_result_keyword_is_case_insensitive():
+    assert matches_result_keyword("ACCEPTED", RESULT_ACCEPT) is True
+    assert matches_result_keyword("Accepted — looks good", RESULT_ACCEPT) is True
+    assert matches_result_keyword("MANUAL — needs a human", RESULT_MANUAL) is True
+    assert matches_result_keyword("REJECTED — fix tests", RESULT_REJECT) is True
+    assert matches_result_keyword("garbled", RESULT_ACCEPT) is False
+
+
+def test_classify_gate_accepts_uppercase_result_phrase():
+    state = {REVIEW_NODE: {RESULT_KEY: "ACCEPTED"}}
+    assert classify_gate(state, REVIEW_GATE, REVIEW_NODE) == {ROUTE_KEY: ACCEPT}

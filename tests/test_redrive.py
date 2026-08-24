@@ -77,7 +77,6 @@ def test_redrive_resets_attempt_count_after_manual_resolution(monkeypatch, tmp_p
                 (f"Result: {RESULT_REJECT} — bad", True),
                 (f"Result: {RESULT_IMPLEMENTED}", True),
                 (f"Result: {RESULT_REJECT} — bad", True),
-                ("manual flag summary\nResult: flagged", True),
             ]
         ),
     )

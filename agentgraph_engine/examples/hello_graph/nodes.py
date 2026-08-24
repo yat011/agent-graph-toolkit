@@ -21,6 +21,7 @@ from agentgraph_engine.constants import (
     RUN_DIR_KEY,
 )
 from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
+from agentgraph_engine.routing import matches_result_keyword
 from .state import HelloState
 
 GREET_NODE = "greet_node"
@@ -101,7 +102,7 @@ def checker(state: HelloState) -> dict:
         len(results) == len(items)
         and results == [str(i).upper() for i in items]
         and bool(worker.get(OK_KEY))
-        and line.startswith(RESULT_GREETED)
+        and matches_result_keyword(line, RESULT_GREETED)
     )
     return {CHECKER_NODE: {ATTEMPT_COUNT_KEY: 1, OK_KEY: ok}}
 

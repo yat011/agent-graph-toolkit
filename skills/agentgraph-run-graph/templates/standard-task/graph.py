@@ -34,7 +34,7 @@ from agentgraph_engine.constants import (
     SUCCESS_NODE,
 )
 from agentgraph_engine.nodes.common import halted
-from agentgraph_engine.routing import GateConfig, gate_route
+from agentgraph_engine.routing import GateConfig, gate_route, matches_result_keyword
 from agentgraph_engine.states.standard_task import StandardTaskState
 
 from .nodes import implement_requirements, manual_flag, review, success
@@ -49,7 +49,7 @@ def route_after_implement(state: StandardTaskState) -> str:
     if state.get(HALTED_KEY):
         return HALTED_NODE
     line = ((state.get(IMPLEMENT_REQUIREMENTS_NODE) or {}).get(RESULT_KEY) or "").strip()
-    if line.startswith(RESULT_IMPLEMENTED):
+    if matches_result_keyword(line, RESULT_IMPLEMENTED):
         return REVIEW_NODE
     return MANUAL_FLAG_NODE
 

@@ -33,7 +33,9 @@ from agentgraph_engine.worker_cli import (
     worker_cli_for,
 )
 
-RESULT_LINE_RE = re.compile(r"(?m)^Result:\s*(.+?)\s*$")
+# Optional ATX heading (`## Result:`) plus case-insensitive `Result:` so workers that write
+# `## Result: ACCEPTED` still yield a phrase classify_gate can match.
+RESULT_LINE_RE = re.compile(r"(?im)^(?:#{1,6}\s+)?Result:\s*(.+?)\s*$")
 
 # agents/{role}.md lives two levels up from this file (repo_root/agentgraph_engine/dispatch.py).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
@@ -194,8 +196,9 @@ def dispatch_worker(
     """Dispatch one stateless Worker call.
 
     The combined prompt is: the role's persona text (`agents/{role}.md`, frontmatter stripped) +
-    the node's own `task_prompt` + an instruction to write the node's full output to
-    `output_path`. A fresh headless CLI process has no notion of a Claude-Code "subagent type",
+    the node's own `task_prompt` + caveman-full output.md voice + an instruction to write
+    that output to `output_path`. A fresh headless CLI process has no notion of a Claude-Code
+    "subagent type",
     so this is how a Node's declared `agent:` role is carried into the dispatch without inventing
     an undocumented CLI flag.
 
@@ -216,9 +219,13 @@ def dispatch_worker(
     if persona:
         parts.append(persona)
     parts.append(task_prompt.strip())
+    # One place for every LLM node: output.md voice. Path line stays last so test fakes can parse it.
     parts.append(
+        "output.md voice: caveman full. Drop articles, filler, hedging, pleasantries. "
+        "Fragments OK. Short synonyms. Pattern: [thing] [action] [reason]. "
+        "Keep Result: line, paths, commands, code, and error strings exact.\n"
         "Before you finish, you MUST use your file-write tool to create the file below with your "
-        "full output as its content — a chat reply alone is not enough, this file is how the next "
+        "output as its content — a chat reply alone is not enough, this file is how the next "
         "step finds your work.\n"
         f"Write your full output to this exact file path before finishing: {output_path}"
     )
