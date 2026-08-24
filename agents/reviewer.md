@@ -13,6 +13,9 @@ determined adversarial reviewer would push back on. Challenge the approach itsel
 line-level details. If you genuinely find nothing wrong after actively looking, write only the
 Result line rather than padding the report with nitpicks.
 
+Gitignored generated file that spec/plan names: non-blocking. Do not reject or
+`Result: manual` because git cannot see that file.
+
 Judge the diff along two independent axes per the `agentgraph-code-review-standards` skill (that's
 also where the smell-baseline checklist and the Spec-axis checklist live). Never merge or rerank
 findings across axes. Each failure is a bullet tagged `Standards` or `Spec`: reason, then a

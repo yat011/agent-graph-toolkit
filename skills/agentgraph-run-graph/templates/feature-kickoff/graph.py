@@ -6,7 +6,9 @@
                                                `-[rejected, attempted < 3x]-------> 02_planner (loop back)
 
     04_load_tasks
-     |-[accepted, env working]-> 05_run_tasks (sequential map: standard-task per task) -> 06_final_review
+     |-[accepted, env working]-> 05_run_tasks (sequential map: standard-task per task)
+     |                            |-[any item 05_manual_flag]------------------------> 08_needs_manual_review
+     |                            `-[no item flagged]--------------------------------> 06_final_review
      |                                                                                   |-[script exit 0]-> 09_success
      |                                                                                   `-[script fail/missing]-> 08_needs_manual_review
      `-[manual, env down]--------------------------------------------------------------------------------> 08_needs_manual_review
@@ -20,8 +22,9 @@ recursion of standard-task per task item, dispatched strictly sequentially (no c
 dispatch), honoring each item's `dependencies` list: a permanently-blocked item (a missing
 dependency id, or one that finished at manual_flag) is left `blocked` rather than halting the
 whole map; a genuine cycle (nothing ready, something still waiting) halts with
-`unmet_dependencies`. An unrecognized `Result:` line on a gate routes to manual immediately
-(`halt_reason: unrecognized_result`).
+`unmet_dependencies`. After the map, any item that finished at `manual_flag` skips
+06_final_review and routes to 08_needs_manual_review. An unrecognized `Result:` line on a gate
+routes to manual immediately (`halt_reason: unrecognized_result`).
 """
 
 from __future__ import annotations
@@ -35,7 +38,10 @@ from agentgraph_engine.constants import (
     HALTED_KEY,
     HALTED_NODE,
     LOAD_TASKS_NODE,
+    MAP_TASK_STATES_KEY,
     NEEDS_MANUAL_REVIEW_NODE,
+    OUTCOME_KEY,
+    OUTCOME_MANUAL_FLAG,
     PLANNER_NODE,
     RUN_TASKS_NODE,
     SUCCESS_NODE,
@@ -99,8 +105,19 @@ def route_after_load_tasks(state: FeatureKickoffState) -> str:
     )
 
 
+def _map_has_manual_flag(state: FeatureKickoffState) -> bool:
+    for child in state.get(MAP_TASK_STATES_KEY) or []:
+        if child.get(OUTCOME_KEY) == OUTCOME_MANUAL_FLAG:
+            return True
+    return False
+
+
 def route_after_run_tasks(state: FeatureKickoffState) -> str:
-    return HALTED_NODE if state.get(HALTED_KEY) else FINAL_REVIEW_NODE
+    if state.get(HALTED_KEY):
+        return HALTED_NODE
+    if _map_has_manual_flag(state):
+        return NEEDS_MANUAL_REVIEW_NODE
+    return FINAL_REVIEW_NODE
 
 
 def route_after_final_review(state: FeatureKickoffState) -> str:
@@ -161,7 +178,11 @@ def build_graph(checkpointer=None):
     graph.add_conditional_edges(
         RUN_TASKS_NODE,
         route_after_run_tasks,
-        {FINAL_REVIEW_NODE: FINAL_REVIEW_NODE, HALTED_NODE: HALTED_NODE},
+        {
+            FINAL_REVIEW_NODE: FINAL_REVIEW_NODE,
+            NEEDS_MANUAL_REVIEW_NODE: NEEDS_MANUAL_REVIEW_NODE,
+            HALTED_NODE: HALTED_NODE,
+        },
     )
     graph.add_conditional_edges(
         FINAL_REVIEW_NODE,

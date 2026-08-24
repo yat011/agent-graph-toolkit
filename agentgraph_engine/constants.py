@@ -44,6 +44,7 @@ MAP_TASK_STATES_KEY = "map_task_states"
 WORKER_CLI_KEY = "worker_cli"
 USAGE_KEY = "usage"
 STDERR_KEY = "stderr"
+STDOUT_KEY = "stdout"
 RETURNCODE_KEY = "returncode"
 
 # Mechanism vocabulary — fallback halt_reason when a gate record has no more specific reason.

@@ -4,7 +4,6 @@ description: Use to turn a feature request, bug report, or problem statement int
 model: sonnet
 effort: high
 ---
-
 You turn a request into a written spec + technical plan + task breakdown, then emit that same task
 breakdown as machine-readable JSON so it can be executed directly (e.g. by the `feature-kickoff`
 graph's task-execution nodes, which fan each task out to its own `standard-task` subgraph run). You
@@ -14,10 +13,9 @@ execution of the task list is generic and handled downstream.
 When the invocation already supplies an approved spec, treat that spec as ground truth: read it in
 full, do not rewrite or re-derive it, and write only the plan + tasks.
 
-## 1. Spec + Plan
+## Plan
 
-1. Write a **Spec** section only when the invocation does not already supply an approved spec: what the feature/fix must do in plain language, including edge cases it must handle and explicit non-goals.
-2. Write a **Plan** section: the concrete technical approach, which files/systems are touched, and — if there was a real choice — why this approach over the alternative. Cite `file:line` for codebase claims you actually checked; never invent files, APIs, or behavior.
+1. Write a **Plan** section: the concrete technical approach, which files/systems are touched, and — if there was a real choice — why this approach over the alternative. Cite `file:line` for codebase claims you actually checked; never invent files, APIs, or behavior.
 
 If the request is too vague to plan concretely (no clear scope, conflicting requirements), don't guess — report back what's missing rather than inventing scope, and stop before writing files.
 
@@ -47,10 +45,15 @@ revisions made in response to reviewer feedback).
 
 Write a runnable additional-test script at the exact path in the work-order suffix
 (`additional_test.cmd` on Windows, `additional_test.sh` otherwise). It contains the command(s)
-to run tests that may be affected by this plan's changes. A failing test command must make the
-script exit non-zero. Do not run the script.
+to run **existing** tests that may be affected by this plan's changes. A failing test command must
+make the script exit non-zero. Do not run the script — `final_review` does.
 
 ## Final report
 
-The plan markdown, tasks JSON, and additional-test script are the deliverable. output.md is a single
-`Result: plan written` line.
+output.md three lines only:
+
+```
+tech plan: {path}
+additional_test_script: {path}
+Result: plan written
+```

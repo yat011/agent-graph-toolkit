@@ -28,6 +28,7 @@ from agentgraph_engine.examples.hello_graph.nodes import (
     GREET_NODE,
     RESULTS_KEY,
 )
+from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.graph_loader import load_graph_module
 from agentgraph_engine.runs import checkpoint_path_for, open_checkpointer, run_dir_for
 
@@ -35,7 +36,7 @@ GRAPH_PATH = (
     Path(__file__).resolve().parent.parent / "agentgraph_engine" / "examples" / "hello_graph" / "graph.py"
 )
 
-MARKER = "Write your full output to this exact file path before finishing: "
+MARKER = OUTPUT_PATH_LINE_PREFIX
 
 
 def _write_output(input_text: str, content: str) -> None:

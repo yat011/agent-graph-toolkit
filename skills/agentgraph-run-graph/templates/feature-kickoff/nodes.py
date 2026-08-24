@@ -43,6 +43,7 @@ from agentgraph_engine.constants import (
     STANDARD_TASK_MANUAL_FLAG_DIR,
     STANDARD_TASK_SUCCESS_DIR,
     STDERR_KEY,
+    STDOUT_KEY,
     TECH_PLAN_REVIEWER_NODE,
 )
 from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry, extract_result_line
@@ -306,17 +307,13 @@ def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> 
     additional_test = _additional_test_script_path(run_dir)
     kind = _additional_test_script_kind()
     prompt = (
-        "Write the tech plan (starting with a `Spec:` line naming the spec file) and the same "
-        "task list as machine-readable JSON (id, title, description, test_cases, dependencies, "
-        "optional test_scope) at the paths in the suffix.\n"
+        "Write plan, tasks JSON, and additional-test at suffix paths.\n"
         "\n"
-        f"Also write a {kind} at the additional-test path in the suffix. It must contain "
-        "runnable command(s) to run the tests that may be affected by this plan's changes. "
-        "A failing test command must yield a non-zero exit code for the whole script "
-        "(Windows cmd: `exit /b 1`; POSIX: `set -e` or `|| exit 1`). "
-        "Do not run the script.\n"
-        "\n"
-        "End output.md with a single-line `Result: plan written`.\n"
+        f"Additional-test is a {kind}. Engine runs it with repository root as cwd; use "
+        "repo-relative paths. If command is `node --test`, pass test-file paths or glob "
+        "(`dir/*.test.js`), never a directory — Node 24 treats a directory argument as CJS "
+        "module and exits non-zero even when tests exist. Non-zero exit: Windows cmd "
+        "`exit /b 1`; POSIX `set -e` or `|| exit 1`.\n"
     )
     if attempt > 1:
         reviewer_dir = run_dir / TECH_REVIEW_NODE_DIR
@@ -324,18 +321,17 @@ def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> 
             attempts = sorted(reviewer_dir.glob("attempt-*/output.md"))
             if attempts:
                 prompt += (
-                    "\nA previous attempt was rejected — read its findings first: "
-                    f"{attempts[-1]}. Revise the plan, task list, and additional-test script "
-                    "to explicitly address every rejection reason (sticky-research convention: "
-                    "treat facts you already established as still valid unless the rejection "
-                    "specifically contradicts them).\n"
+                    "\nPrevious attempt rejected — read findings first: "
+                    f"{attempts[-1]}. Revise plan, task list, additional-test script to "
+                    "address every rejection reason (sticky-research: facts already established "
+                    "stay valid unless rejection specifically contradicts them).\n"
                 )
     spec_display = str(spec) if spec is not None else "(none)"
     prompt += (
         f"\nSpec: {spec_display}\n"
-        f"Plan: {plan_md}\n"
+        f"tech plan: {plan_md}\n"
         f"Tasks JSON: {tasks_json}\n"
-        f"Additional test script: {additional_test}\n"
+        f"additional_test_script: {additional_test}\n"
     )
     return prompt
 
@@ -369,25 +365,16 @@ def _tech_review_prompt(state: FeatureKickoffState) -> str:
     spec_display = str(spec) if spec is not None else "(none)"
     additional_test = _additional_test_script_path(Path(state[RUN_DIR_KEY]))
     prompt = (
-        "Review the plan and tasks (not the spec's own decisions).\n"
+        "Review plan and tasks (not spec's own decisions).\n"
         "\n"
-        "Confirm the additional-test script exists at the path in the suffix. Do not review "
-        "which tests it runs or whether its scope is complete — existence only.\n"
-        "\n"
-        "On reject, list each failure as a bullet: reason, then a pointer "
-        "(plan section, task id, or file:line).\n"
-        "On accept, write only the Result line.\n"
-        "\n"
-        f"End output.md with `Result: {RESULT_ACCEPT}`, "
-        f"`Result: {RESULT_REJECT} — <reason>`, or — only if you judge this situation needs a "
-        f"human right now rather than another automatic attempt — "
-        f"`Result: {RESULT_MANUAL} — <reason>`.\n"
+        f"Also allowed: `Result: {RESULT_MANUAL} — <reason>` if human needed now rather "
+        "than another automatic attempt.\n"
     )
     prompt += (
         f"\nSpec: {spec_display}\n"
-        f"Plan: {plan_md}\n"
+        f"tech plan: {plan_md}\n"
         f"Tasks JSON: {tasks_json}\n"
-        f"Additional test script: {additional_test}\n"
+        f"additional_test_script: {additional_test}\n"
     )
     return prompt
 
@@ -620,6 +607,7 @@ def final_review(state: FeatureKickoffState) -> dict:
     output_path = node_output_path(run_dir, FINAL_REVIEW_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
     script = _additional_test_script_path(run_dir)
+    stdout = ""
     stderr = ""
     returncode: Optional[int] = None
     reasons: list[str] = []
@@ -634,6 +622,7 @@ def final_review(state: FeatureKickoffState) -> dict:
             returncode = 127
             reasons.append(f"failed to launch additional_test script: {exc}")
         else:
+            stdout = proc.stdout or ""
             stderr = proc.stderr or ""
             returncode = proc.returncode
             if returncode != 0:
@@ -643,11 +632,13 @@ def final_review(state: FeatureKickoffState) -> dict:
     if incomplete:
         reasons.append("incomplete tasks: " + ", ".join(incomplete))
 
+    record[STDOUT_KEY] = stdout
     record[STDERR_KEY] = stderr
     record[RETURNCODE_KEY] = returncode
-    stderr_path = output_path.parent / "stderr.txt"
-    stderr_path.parent.mkdir(parents=True, exist_ok=True)
-    stderr_path.write_text(stderr, encoding="utf-8")
+    attempt_dir = output_path.parent
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    (attempt_dir / "stdout.txt").write_text(stdout, encoding="utf-8")
+    (attempt_dir / "stderr.txt").write_text(stderr, encoding="utf-8")
 
     if reasons:
         reason = "; ".join(reasons)
@@ -661,6 +652,7 @@ def final_review(state: FeatureKickoffState) -> dict:
         (
             f"Additional test script: {script}\n"
             f"Return code: {rc_display}\n"
+            f"stdout:\n{stdout}\n"
             f"stderr:\n{stderr}\n\n"
             f"Result: {result_line}\n"
         ),
@@ -728,6 +720,12 @@ def needs_manual_review(state: FeatureKickoffState) -> dict:
     if _record(state, FINAL_REVIEW_NODE).get(ROUTE_KEY) == MANUAL:
         redrive_node = FINAL_REVIEW_NODE
         reason = _record(state, FINAL_REVIEW_NODE).get(HALT_REASON_KEY, HALT_MANUAL_REVIEW_NEEDED)
+    elif any(
+        child.get(OUTCOME_KEY) == OUTCOME_MANUAL_FLAG
+        for child in (state.get(MAP_TASK_STATES_KEY) or [])
+    ):
+        redrive_node = RUN_TASKS_NODE
+        reason = HALT_MANUAL_REVIEW_NEEDED
     else:
         redrive_node = LOAD_TASKS_NODE
         reason = _record(state, LOAD_TASKS_NODE).get(HALT_REASON_KEY, HALT_MANUAL_REVIEW_NEEDED)

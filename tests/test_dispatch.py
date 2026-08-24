@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from agentgraph_engine.dispatch import (
+    OUTPUT_PATH_LINE_PREFIX,
     RolePromptError,
     dispatch_worker,
     dispatch_with_retry,
@@ -41,9 +42,10 @@ def make_executor(write_output: bool, returncode: int = 0, envelope: dict | None
         if write_output:
             # Simulate the headless worker writing its own output.md, as instructed in the
             # combined prompt.
-            marker = "Write your full output to this exact file path before finishing: "
-            path_line = next(line for line in input_text.splitlines() if line.startswith(marker))
-            out_path = Path(path_line[len(marker):].strip())
+            path_line = next(
+                line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+            )
+            out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX):].strip())
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text("Some prose.\nResult: done\n", encoding="utf-8")
         import json
@@ -58,9 +60,10 @@ def test_dispatch_prompt_sets_caveman_full_output_voice(tmp_path):
 
     def executor(argv, input_text, timeout):
         captured["text"] = input_text
-        marker = "Write your full output to this exact file path before finishing: "
-        path_line = next(line for line in input_text.splitlines() if line.startswith(marker))
-        out_path = Path(path_line[len(marker) :].strip())
+        path_line = next(
+            line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+        )
+        out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX) :].strip())
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text("Result: done\n", encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
@@ -73,11 +76,12 @@ def test_dispatch_prompt_sets_caveman_full_output_voice(tmp_path):
     )
     assert result.ok is True
     text = captured["text"]
-    assert "caveman full" in text
+    assert "caveman skill full" in text
     assert "Keep Result: line" in text
-    assert text.index("caveman full") < text.index(
-        "Write your full output to this exact file path before finishing:"
-    )
+    assert "Never recap" in text
+    assert "file:line" in text
+    assert "one-line `Result: {xxx}`" in text
+    assert text.index("caveman skill full") < text.index(OUTPUT_PATH_LINE_PREFIX)
 
 
 def test_dispatch_success_reads_result_line_from_output_file(tmp_path):
@@ -188,9 +192,10 @@ def test_dispatch_with_retry_stops_at_first_ok(tmp_path):
         calls["n"] += 1
         if calls["n"] < 2:
             return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
-        marker = "Write your full output to this exact file path before finishing: "
-        path_line = next(line for line in input_text.splitlines() if line.startswith(marker))
-        out_path = Path(path_line[len(marker):].strip())
+        path_line = next(
+            line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+        )
+        out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX):].strip())
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text("Result: implemented\n", encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
@@ -234,6 +239,13 @@ def test_load_role_prompt_strips_frontmatter_for_real_role_file():
     text = load_role_prompt("code-writer")
     assert not text.startswith("---")
     assert "minimal correct change" in text
+
+
+def test_load_role_prompt_reviewer_gitignore_is_non_blocking():
+    text = load_role_prompt("reviewer")
+    assert "Gitignored generated file" in text
+    assert "non-blocking" in text
+    assert text.count("Gitignored generated file") == 1
 
 
 def test_load_role_prompt_general_purpose_has_no_persona():

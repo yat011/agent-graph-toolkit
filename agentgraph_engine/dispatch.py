@@ -42,6 +42,9 @@ AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
 USAGE_FILENAME = "usage.json"
 
+# Last prompt line. Test fakes parse the output path off this prefix; keep it last.
+OUTPUT_PATH_LINE_PREFIX = "Write your required output to this exact file path before finishing: "
+
 # A role with no agents/{role}.md file (e.g. "general-purpose") gets no persona text prepended —
 # the task prompt is dispatched as-is.
 NO_PERSONA_ROLES = {ROLE_GENERAL_PURPOSE}
@@ -196,9 +199,9 @@ def dispatch_worker(
     """Dispatch one stateless Worker call.
 
     The combined prompt is: the role's persona text (`agents/{role}.md`, frontmatter stripped) +
-    the node's own `task_prompt` + caveman-full output.md voice + an instruction to write
-    that output to `output_path`. A fresh headless CLI process has no notion of a Claude-Code
-    "subagent type",
+    the node's own `task_prompt` + caveman-full output.md voice (Result line minimum, never
+    recap, file:line pointers) + an instruction to write that output to `output_path`. A
+    fresh headless CLI process has no notion of a Claude-Code "subagent type",
     so this is how a Node's declared `agent:` role is carried into the dispatch without inventing
     an undocumented CLI flag.
 
@@ -216,19 +219,20 @@ def dispatch_worker(
     mapped_model = vendor_cli.resolve_model(model)
 
     parts = []
+    parts.append(
+        "Always use caveman skill full mode. "
+        "output.md minimum: one-line `Result: {xxx}` plus this node's extra required lines only. "
+        "Never recap. Cite file:line pointers instead of restated content. "
+        "Keep Result: line, paths, commands, code, and error strings exact.\n"
+        "Before you finish, MUST use file-write tool to create the file below with that "
+        "output as its content — chat reply alone not enough, next step finds work from this file.\n"
+    )
     if persona:
         parts.append(persona)
     parts.append(task_prompt.strip())
     # One place for every LLM node: output.md voice. Path line stays last so test fakes can parse it.
-    parts.append(
-        "output.md voice: caveman full. Drop articles, filler, hedging, pleasantries. "
-        "Fragments OK. Short synonyms. Pattern: [thing] [action] [reason]. "
-        "Keep Result: line, paths, commands, code, and error strings exact.\n"
-        "Before you finish, you MUST use your file-write tool to create the file below with your "
-        "output as its content — a chat reply alone is not enough, this file is how the next "
-        "step finds your work.\n"
-        f"Write your full output to this exact file path before finishing: {output_path}"
-    )
+    parts.append(f"{OUTPUT_PATH_LINE_PREFIX}{output_path}")
+
     combined_prompt = "\n\n---\n\n".join(parts) + "\n"
 
     # Resolve via PATH/PATHEXT (shutil.which) rather than passing the binary name straight to

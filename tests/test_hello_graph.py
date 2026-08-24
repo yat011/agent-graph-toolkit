@@ -26,13 +26,14 @@ from agentgraph_engine.examples.hello_graph.nodes import (
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
+from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 
 GRAPH_PATH = (
     Path(__file__).resolve().parent.parent / "agentgraph_engine" / "examples" / "hello_graph" / "graph.py"
 )
 
-MARKER = "Write your full output to this exact file path before finishing: "
+MARKER = OUTPUT_PATH_LINE_PREFIX
 
 
 def _write_output(input_text: str, content: str) -> None:

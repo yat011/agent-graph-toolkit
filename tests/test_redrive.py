@@ -28,10 +28,11 @@ from agentgraph_engine.constants import (
     REVIEW_NODE,
     RUN_DIR_KEY,
 )
+from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module, resolve_graph_path
 from agentgraph_engine.runs import open_checkpointer, run_dir_for, thread_config
 
-MARKER = "Write your full output to this exact file path before finishing: "
+MARKER = OUTPUT_PATH_LINE_PREFIX
 
 
 def _write_output(input_text: str, content: str) -> None:

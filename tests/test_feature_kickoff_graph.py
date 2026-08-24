@@ -37,11 +37,14 @@ from agentgraph_engine.constants import (
     RESULT_IMPLEMENTED,
     RETURNCODE_KEY,
     RUN_DIR_KEY,
+    RUN_TASKS_NODE,
     SPEC_PATH_KEY,
     STANDARD_TASK_SUCCESS_DIR,
     STDERR_KEY,
+    STDOUT_KEY,
     TECH_PLAN_REVIEWER_NODE,
 )
+from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 
 GRAPH_PATH = (
@@ -53,7 +56,7 @@ GRAPH_PATH = (
     / "graph.py"
 )
 
-MARKER = "Write your full output to this exact file path before finishing: "
+MARKER = OUTPUT_PATH_LINE_PREFIX
 NODES_MODULE = "agentgraph_template__feature_kickoff.nodes"
 
 
@@ -299,6 +302,9 @@ def test_dependency_on_manual_flagged_item_leaves_dependent_blocked(monkeypatch,
     assert outcomes["t1"] == OUTCOME_MANUAL_FLAG
     assert outcomes["t2"] == OUTCOME_BLOCKED
     assert result[OUTCOME_KEY] == OUTCOME_MANUAL_REVIEW
+    assert FINAL_REVIEW_NODE not in result
+    assert not (run_dir / "06_final_review").exists()
+    assert result[HALTED_AT_NODE_KEY] == RUN_TASKS_NODE
 
 
 def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch, build_graph, tmp_path):
@@ -369,14 +375,22 @@ def test_planner_prompt_asks_for_os_specific_additional_test_script(monkeypatch,
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     nodes = sys.modules[NODES_MODULE]
     script_path = str(nodes._additional_test_script_path(run_dir))
-    planner_text = next(t for t in captured if "Write the tech plan" in t)
-    assert "Additional test script:" in planner_text
+    planner_text = next(t for t in captured if "Write plan, tasks JSON, and additional-test" in t)
+    assert "additional_test_script:" in planner_text
     assert script_path in planner_text
     assert nodes._additional_test_script_kind() in planner_text
     assert "Do not run the script" in planner_text
-    review_text = next(t for t in captured if "Review the plan and tasks" in t)
+    assert planner_text.count("Do not run the script") == 1
+    assert "never a directory" in planner_text
+    assert "repository root as cwd" in planner_text
+    assert "output.md three lines only" in planner_text
+    assert planner_text.count("output.md three lines only") == 1
+    assert f"additional_test_script: {script_path}" in planner_text
+    assert "Result: plan written" in planner_text
+    review_text = next(t for t in captured if "not spec's own decisions" in t)
     assert "existence only" in review_text
-    assert "Do not review which tests it runs" in review_text
+    assert review_text.count("existence only") == 1
+    assert "Do **not** review which tests it runs" in review_text
     assert script_path in review_text
     expected_name = "additional_test.cmd" if sys.platform == "win32" else "additional_test.sh"
     assert expected_name in script_path
@@ -430,26 +444,30 @@ def test_final_review_runs_script_stores_stderr_and_succeeds(monkeypatch, build_
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert ran == [script_path]
     record = result[FINAL_REVIEW_NODE]
+    assert record[STDOUT_KEY] == "ok\n"
     assert record[STDERR_KEY] == "warning: unused\n"
     assert record[RETURNCODE_KEY] == 0
     assert record[RESULT_KEY] == RESULT_ACCEPT
-    stderr_file = run_dir / "06_final_review" / "attempt-1" / "stderr.txt"
-    assert stderr_file.read_text(encoding="utf-8") == "warning: unused\n"
-    output = (run_dir / "06_final_review" / "attempt-1" / "output.md").read_text(encoding="utf-8")
+    attempt_dir = run_dir / "06_final_review" / "attempt-1"
+    assert (attempt_dir / "stdout.txt").read_text(encoding="utf-8") == "ok\n"
+    assert (attempt_dir / "stderr.txt").read_text(encoding="utf-8") == "warning: unused\n"
+    output = (attempt_dir / "output.md").read_text(encoding="utf-8")
+    assert "ok" in output
     assert "warning: unused" in output
     assert "Return code: 0" in output
 
 
-def test_final_review_nonzero_exit_routes_to_manual_and_stores_stderr(
+def test_final_review_nonzero_exit_routes_to_manual_and_stores_streams(
     monkeypatch, build_graph, tmp_path
 ):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     _seed_additional_test(run_dir)
+    tap_stdout = "Cannot find module '...\\\\scripts\\\\test'\n✖ agent_works\\scripts\\test\n"
 
     def runner(path: Path) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(
-            ["additional_test", str(path)], 1, stdout="", stderr="FAILED tests/test_foo.py\n"
+            ["additional_test", str(path)], 1, stdout=tap_stdout, stderr=""
         )
 
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
@@ -461,11 +479,15 @@ def test_final_review_nonzero_exit_routes_to_manual_and_stores_stderr(
     result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
     assert result[OUTCOME_KEY] == OUTCOME_MANUAL_REVIEW
     record = result[FINAL_REVIEW_NODE]
-    assert record[STDERR_KEY] == "FAILED tests/test_foo.py\n"
+    assert record[STDOUT_KEY] == tap_stdout
+    assert record[STDERR_KEY] == ""
     assert record[RETURNCODE_KEY] == 1
     assert "additional tests failed (exit 1)" in (record[RESULT_KEY] or "")
-    stderr_file = run_dir / "06_final_review" / "attempt-1" / "stderr.txt"
-    assert stderr_file.read_text(encoding="utf-8") == "FAILED tests/test_foo.py\n"
+    attempt_dir = run_dir / "06_final_review" / "attempt-1"
+    assert (attempt_dir / "stdout.txt").read_text(encoding="utf-8") == tap_stdout
+    assert (attempt_dir / "stderr.txt").read_text(encoding="utf-8") == ""
+    output = (attempt_dir / "output.md").read_text(encoding="utf-8")
+    assert "Cannot find module" in output
 
 
 def test_additional_test_argv_is_os_specific():

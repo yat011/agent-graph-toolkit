@@ -14,6 +14,7 @@ class LoadTasksNodeState(GateNodeState, total=False):
 
 class FinalReviewNodeState(GateNodeState, total=False):
     stderr: Optional[str]
+    stdout: Optional[str]
     returncode: Optional[int]
 
 
