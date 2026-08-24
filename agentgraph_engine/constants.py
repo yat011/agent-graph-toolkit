@@ -43,6 +43,8 @@ SPEC_PATH_KEY = "spec_path"
 MAP_TASK_STATES_KEY = "map_task_states"
 WORKER_CLI_KEY = "worker_cli"
 USAGE_KEY = "usage"
+STDERR_KEY = "stderr"
+RETURNCODE_KEY = "returncode"
 
 # Mechanism vocabulary — fallback halt_reason when a gate record has no more specific reason.
 HALT_MANUAL_REVIEW_NEEDED = "manual_review_needed"

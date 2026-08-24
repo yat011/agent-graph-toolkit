@@ -12,27 +12,10 @@ are owned by the compiled LangGraph `StateGraph` itself, driven by the `agentgra
 (`agentgraph_engine/cli.py`; see `ENGINE-CLI.md` in this same directory for exact command syntax
 — this file does not restate it).
 
-**This is a real architectural change from the retired `graph.md`/`run-graph.js` engine, not just
-a syntax change**, and it changes what you (the Coordinating agent) actually do:
-
-- The old engine's `agents/graph-runner.md` existed solely to solve a token-cost problem: a
-  coordinating LLM had to re-read instructions and make one `Agent`-tool dispatch call per node,
-  so a long graph run burned real tokens on "what do I do now" at every single hop, and hopping
-  the loop off to a fresh `graph-runner` copy per node was the mitigation. **That problem doesn't
-  exist anymore** — a Python interpreter (LangGraph) drives every node of a run inside one
-  `agentgraph start`/`resume`/`redrive` call, so `graph-runner.md` is retired outright, not
-  replaced by an equivalent. There is no hand-off chain to manage, no subagent-nesting-depth
-  ceiling to worry about, and no "small graph vs. big graph" cost tradeoff — one call handles a
-  9-node graph exactly as cheaply (in your own tokens) as a 2-node one.
-- **Dispatch and branch judgment both live in the graph's own Python code now**, not in you. A
-  node's router function does plain string-matching against a `Result:` line — never an LLM or
-  human judgment call. You are not the one deciding "does this `Result:` line mean
-  approve or reject"; the compiled graph already decided that before you see anything.
-- What's left for you, conceptually the same *kind* of job the old hand-off loop did (start
-  something, then read back what happened and decide the next mechanical step) but now at the
-  granularity of a whole Run's terminal state, not one node: call `agentgraph start` (or
-  `resume`/`redrive`), then interpret the **one** JSON object it prints back, and either report
-  done, ask the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
+Dispatch and branch judgment live in the graph's own Python code. A node's router function does
+plain string-matching against a `Result:` line — never an LLM or human judgment call. You start
+or resume a run, then interpret the **one** JSON object the CLI prints back: report done, ask
+the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
 
 ## Inputs
 
@@ -97,9 +80,8 @@ guess:
 
 ## Halting
 
-There is no `capability_gap` halt (there's no coordinating LLM positioned to make a per-dispatch
-tool-gap judgment anymore, so a bad node/prompt pairing just surfaces as an ordinary technical
-failure, same path as any other). Halt reasons:
+A failing/erroring Worker CLI dispatch is an ordinary technical failure, subject to the node's
+own `retry` count, then `halt_reason: "retries_exhausted"`. Halt reasons:
 
 - `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit, or the
   Worker didn't write its required output file) more times than its `retry` count allows. See
@@ -119,11 +101,11 @@ creates a fresh run. Use `redrive` explicitly.
 ## Map items and cross-item dependencies
 
 A map/fan-out node (e.g. `05_run_tasks` inside `feature-kickoff`) dispatches sequentially — no
-concurrent dispatch, per this migration's settled design — and honors each item's own
-`dependencies` (other item ids): an item doesn't start until every listed dependency reached a
-success terminal; a permanently-blocked item (a missing dependency id, or one that itself ended at
-a non-success terminal like `standard-task`'s `manual_flag`) is left `blocked` rather than halting
-the whole map, so a later review node can still see and report the gap. Each item's own artifacts
-land under `{run_dir}/{map_node_name}/item-{n}/`, using the same `{node_name}/attempt-{n}/output.md`
+concurrent dispatch — and honors each item's own `dependencies` (other item ids): an item doesn't
+start until every listed dependency reached a success terminal; a permanently-blocked item (a
+missing dependency id, or one that itself ended at a non-success terminal like `standard-task`'s
+`manual_flag`) is left `blocked` rather than halting the whole map, so a later review node can
+still see and report the gap. Each item's own artifacts land under
+`{run_dir}/{map_node_name}/item-{n}/`, using the same `{node_name}/attempt-{n}/output.md`
 convention as every other node — inspect them directly if you need to see what a specific item's
 nested run actually did.

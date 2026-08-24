@@ -1,7 +1,8 @@
 """Tests for the ported feature-kickoff graph.py: branch/planner/tech-review loop, load_tasks
 env-check branch, sequential map/fan-out over standard-task with a dependency gate, and the
-final-review accepted/manual branch. Uses a fake `_run_subprocess` (no real `claude` CLI calls)
-and a fake `_run_git` so create_feature_branch cannot touch the real repo.
+Python final-review additional-test runner. Uses a fake `_run_subprocess` (no real Worker CLI
+calls), a fake `_run_git` so create_feature_branch cannot touch the real repo, and a fake
+`_run_additional_test` so final_review does not execute host scripts.
 """
 
 import json
@@ -13,6 +14,7 @@ import pytest
 
 from agentgraph_engine.constants import (
     ATTEMPT_COUNT_KEY,
+    FINAL_REVIEW_NODE,
     HALTED_AT_NODE_KEY,
     HALTED_KEY,
     HALT_MANUAL_REQUESTED,
@@ -29,12 +31,15 @@ from agentgraph_engine.constants import (
     OUTCOME_SUCCESS,
     PLANNER_NODE,
     RESULT_ACCEPT,
+    RESULT_KEY,
     RESULT_REJECT,
     RESULT_STOPPED,
     RESULT_IMPLEMENTED,
+    RETURNCODE_KEY,
     RUN_DIR_KEY,
     SPEC_PATH_KEY,
     STANDARD_TASK_SUCCESS_DIR,
+    STDERR_KEY,
     TECH_PLAN_REVIEWER_NODE,
 )
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
@@ -88,10 +93,26 @@ def _fake_git(args: list[str]) -> subprocess.CompletedProcess:
     raise AssertionError(f"unexpected git args: {args}")
 
 
+def _fake_additional_test(script_path: Path) -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(["additional_test", str(script_path)], 0, stdout="", stderr="")
+
+
+def _seed_additional_test(run_dir: Path) -> Path:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    nodes = sys.modules[NODES_MODULE]
+    path = nodes._additional_test_script_path(run_dir)
+    if sys.platform == "win32":
+        path.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+    else:
+        path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    return path
+
+
 @pytest.fixture
 def build_graph(monkeypatch):
     module = load_graph_module(GRAPH_PATH)
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_git", _fake_git)
+    monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", _fake_additional_test)
     return get_build_graph(module)
 
 
@@ -116,10 +137,10 @@ def _kickoff_state(run_dir: Path, spec_path: Path) -> dict:
 def test_accepted_path_env_working_reaches_success(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    _seed_additional_test(run_dir)
 
     steps = [
         ("Result: plan written", True),
-        (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_ACCEPT}", True),
     ]
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
@@ -211,6 +232,7 @@ def test_env_down_routes_to_needs_manual_review(monkeypatch, build_graph, tmp_pa
     specs_dir.mkdir(parents=True, exist_ok=True)
     spec_path = specs_dir / "demo.md"
     spec_path.write_text("# demo\n", encoding="utf-8")
+    _seed_additional_test(run_dir)
 
     steps = [
         ("Result: plan written", True),
@@ -234,6 +256,7 @@ def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(monkeyp
         {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
+    _seed_additional_test(run_dir)
     plan_line = "Result: plan written"
 
     steps = [
@@ -242,7 +265,6 @@ def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(monkeyp
         (f"Result: {RESULT_IMPLEMENTED}", True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_IMPLEMENTED}", True),
-        (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_ACCEPT}", True),
     ]
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
@@ -261,13 +283,13 @@ def test_dependency_on_manual_flagged_item_leaves_dependent_blocked(monkeypatch,
         {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
+    _seed_additional_test(run_dir)
     plan_line = "Result: plan written"
 
     steps = [
         (plan_line, True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_STOPPED} — missing capability", True),
-        ("issues\nResult: manual — task t2 blocked", True),
     ]
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
 
@@ -290,6 +312,7 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
         {"id": "b", "title": "B", "description": "d", "dependencies": []},
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
+    _seed_additional_test(run_dir)
     plan_line = "Result: plan written"
 
     item_a_success_path = run_dir / "05_run_tasks" / "item-1" / STANDARD_TASK_SUCCESS_DIR / "attempt-1" / "output.md"
@@ -301,7 +324,6 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
         (f"Result: {RESULT_IMPLEMENTED}", True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_IMPLEMENTED}", True),
-        (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_ACCEPT}", True),
     ]
     remaining = list(script)
@@ -321,14 +343,14 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert seen_a_done_before_b_dispatch["value"] is True
 
-def test_final_review_prompt_is_scoped_not_unfiltered(monkeypatch, build_graph, tmp_path):
+
+def test_planner_prompt_asks_for_os_specific_additional_test_script(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
-    plan_line = "Result: plan written"
+    _seed_additional_test(run_dir)
     captured: list[str] = []
     steps = [
-        (plan_line, True),
-        (f"Result: {RESULT_ACCEPT}", True),
+        ("Result: plan written", True),
         (f"Result: {RESULT_ACCEPT}", True),
     ]
     remaining = list(steps)
@@ -345,27 +367,117 @@ def test_final_review_prompt_is_scoped_not_unfiltered(monkeypatch, build_graph, 
     graph = build_graph()
     result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
-    final_text = next(t for t in captured if "Confirm nothing was skipped." in t)
-    assert "unfiltered test suite" not in final_text
-    assert "--name-only" in final_text or "name-only" in final_text
-    assert "directly import" in final_text
-    assert "test_scope" in final_text
-    assert not final_text.lstrip().startswith("- ")
-    assert final_text.index("Confirm nothing was skipped.") < final_text.index("Per-task outcomes")
-    assert "per-task checklist" not in final_text
-    assert "test command you ran" in final_text
+    nodes = sys.modules[NODES_MODULE]
+    script_path = str(nodes._additional_test_script_path(run_dir))
+    planner_text = next(t for t in captured if "Write the tech plan" in t)
+    assert "Additional test script:" in planner_text
+    assert script_path in planner_text
+    assert nodes._additional_test_script_kind() in planner_text
+    assert "Do not run the script" in planner_text
+    review_text = next(t for t in captured if "Review the plan and tasks" in t)
+    assert "existence only" in review_text
+    assert "Do not review which tests it runs" in review_text
+    assert script_path in review_text
+    expected_name = "additional_test.cmd" if sys.platform == "win32" else "additional_test.sh"
+    assert expected_name in script_path
 
 
-def test_final_review_uppercase_accepted_reaches_success(monkeypatch, build_graph, tmp_path):
+def test_tech_review_rejects_accepted_plan_when_additional_test_script_missing(
+    monkeypatch, build_graph, tmp_path
+):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    plan_line = "Result: plan written"
     steps = [
-        ("Result: plan written", True),
+        (plan_line, True),
         (f"Result: {RESULT_ACCEPT}", True),
-        ("## Result: ACCEPTED\n", True),
+        (plan_line, True),
+        (f"Result: {RESULT_ACCEPT}", True),
+        (plan_line, True),
+        (f"Result: {RESULT_ACCEPT}", True),
     ]
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
     graph = build_graph()
     result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    assert result[OUTCOME_KEY] == OUTCOME_BLOCKED
+    assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 3
+    assert result[HALT_REASON_KEY] == HALT_REJECT_ATTEMPTS_EXHAUSTED
+    review_out = (run_dir / "03_tech_plan_reviewer" / "attempt-1" / "output.md").read_text(
+        encoding="utf-8"
+    )
+    assert "additional_test script missing" in review_out
+
+
+def test_final_review_runs_script_stores_stderr_and_succeeds(monkeypatch, build_graph, tmp_path):
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    script_path = _seed_additional_test(run_dir)
+    ran: list[Path] = []
+
+    def runner(path: Path) -> subprocess.CompletedProcess:
+        ran.append(path)
+        return subprocess.CompletedProcess(
+            ["additional_test", str(path)], 0, stdout="ok\n", stderr="warning: unused\n"
+        )
+
+    monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+    )
+    graph = build_graph()
+    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert ran == [script_path]
+    record = result[FINAL_REVIEW_NODE]
+    assert record[STDERR_KEY] == "warning: unused\n"
+    assert record[RETURNCODE_KEY] == 0
+    assert record[RESULT_KEY] == RESULT_ACCEPT
+    stderr_file = run_dir / "06_final_review" / "attempt-1" / "stderr.txt"
+    assert stderr_file.read_text(encoding="utf-8") == "warning: unused\n"
+    output = (run_dir / "06_final_review" / "attempt-1" / "output.md").read_text(encoding="utf-8")
+    assert "warning: unused" in output
+    assert "Return code: 0" in output
+
+
+def test_final_review_nonzero_exit_routes_to_manual_and_stores_stderr(
+    monkeypatch, build_graph, tmp_path
+):
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    _seed_additional_test(run_dir)
+
+    def runner(path: Path) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(
+            ["additional_test", str(path)], 1, stdout="", stderr="FAILED tests/test_foo.py\n"
+        )
+
+    monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+    )
+    graph = build_graph()
+    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_REVIEW
+    record = result[FINAL_REVIEW_NODE]
+    assert record[STDERR_KEY] == "FAILED tests/test_foo.py\n"
+    assert record[RETURNCODE_KEY] == 1
+    assert "additional tests failed (exit 1)" in (record[RESULT_KEY] or "")
+    stderr_file = run_dir / "06_final_review" / "attempt-1" / "stderr.txt"
+    assert stderr_file.read_text(encoding="utf-8") == "FAILED tests/test_foo.py\n"
+
+
+def test_additional_test_argv_is_os_specific():
+    load_graph_module(GRAPH_PATH)
+    nodes = sys.modules[NODES_MODULE]
+    script = Path("run") / nodes._additional_test_script_name()
+    argv = nodes._additional_test_argv(script)
+    if sys.platform == "win32":
+        assert argv == ["cmd", "/c", str(script)]
+        assert script.name == "additional_test.cmd"
+    else:
+        assert argv[0] in {"bash", "sh"} or argv[0].endswith(("bash", "sh"))
+        assert str(script) in argv
+        assert script.name == "additional_test.sh"
 

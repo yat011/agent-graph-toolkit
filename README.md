@@ -72,7 +72,7 @@ skills/
   agentgraph-define-graph/              # plan -> graph.py
   agentgraph-run-graph/                 # run a graph.py via the `agentgraph` CLI
     ENGINE-CLI.md                      # the `agentgraph` CLI's command contract
-    templates/feature-kickoff/graph.py  # spec -> plan -> per-task implement/review -> suite
+    templates/feature-kickoff/graph.py  # spec -> plan -> per-task implement/review -> additional tests
     templates/standard-task/graph.py    # per-task subgraph used by feature-kickoff
   agentgraph-vertical-slice-tasks/      # how to size a plan's tasks
   agentgraph-code-review-standards/     # Standards vs Spec review

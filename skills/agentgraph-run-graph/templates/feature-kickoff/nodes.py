@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +24,6 @@ from agentgraph_engine.constants import (
     LOAD_TASKS_NODE,
     MANUAL,
     MAP_TASK_STATES_KEY,
-    MODEL_CHEAP,
     OUTCOME_BLOCKED,
     OUTCOME_KEY,
     OUTCOME_MANUAL_FLAG,
@@ -35,18 +35,19 @@ from agentgraph_engine.constants import (
     RESULT_KEY,
     RESULT_MANUAL,
     RESULT_REJECT,
-    ROLE_GENERAL_PURPOSE,
+    RETURNCODE_KEY,
     ROUTE_KEY,
     RUN_DIR_KEY,
     RUN_TASKS_NODE,
     SPEC_PATH_KEY,
     STANDARD_TASK_MANUAL_FLAG_DIR,
     STANDARD_TASK_SUCCESS_DIR,
+    STDERR_KEY,
     TECH_PLAN_REVIEWER_NODE,
 )
 from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry, extract_result_line
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
-from agentgraph_engine.routing import classify_gate
+from agentgraph_engine.routing import classify_gate, matches_result_keyword
 from agentgraph_engine.runs import node_output_path, slugify
 from agentgraph_engine.states.feature_kickoff import FeatureKickoffState
 
@@ -61,6 +62,41 @@ FINAL_REVIEW_NODE_DIR = "06_final_review"
 BLOCKED_NODE_DIR = "07_blocked_plan_rejected"
 MANUAL_REVIEW_NODE_DIR = "08_needs_manual_review"
 SUCCESS_NODE_DIR = "09_success"
+ADDITIONAL_TEST_SCRIPT_WIN = "additional_test.cmd"
+ADDITIONAL_TEST_SCRIPT_POSIX = "additional_test.sh"
+
+
+def _additional_test_script_name() -> str:
+    return ADDITIONAL_TEST_SCRIPT_WIN if sys.platform == "win32" else ADDITIONAL_TEST_SCRIPT_POSIX
+
+
+def _additional_test_script_path(run_dir: Path) -> Path:
+    return run_dir / _additional_test_script_name()
+
+
+def _additional_test_script_kind() -> str:
+    if sys.platform == "win32":
+        return "Windows cmd script"
+    return "POSIX shell script"
+
+
+def _additional_test_argv(script_path: Path) -> list[str]:
+    if sys.platform == "win32":
+        return ["cmd", "/c", str(script_path)]
+    shell = shutil.which("bash") or shutil.which("sh")
+    if shell:
+        return [shell, str(script_path)]
+    return [str(script_path)]
+
+
+def _run_additional_test(script_path: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _additional_test_argv(script_path),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def _record(state: dict, node_id: str) -> dict:
@@ -267,10 +303,18 @@ def create_feature_branch(state: FeatureKickoffState) -> dict:
 def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> str:
     plan_md, tasks_json = _plan_artifact_paths(state)
     spec = _resolve_spec_path(state)
+    additional_test = _additional_test_script_path(run_dir)
+    kind = _additional_test_script_kind()
     prompt = (
         "Write the tech plan (starting with a `Spec:` line naming the spec file) and the same "
         "task list as machine-readable JSON (id, title, description, test_cases, dependencies, "
         "optional test_scope) at the paths in the suffix.\n"
+        "\n"
+        f"Also write a {kind} at the additional-test path in the suffix. It must contain "
+        "runnable command(s) to run the tests that may be affected by this plan's changes. "
+        "A failing test command must yield a non-zero exit code for the whole script "
+        "(Windows cmd: `exit /b 1`; POSIX: `set -e` or `|| exit 1`). "
+        "Do not run the script.\n"
         "\n"
         "End output.md with a single-line `Result: plan written`.\n"
     )
@@ -281,16 +325,17 @@ def _planner_prompt(state: FeatureKickoffState, run_dir: Path, attempt: int) -> 
             if attempts:
                 prompt += (
                     "\nA previous attempt was rejected — read its findings first: "
-                    f"{attempts[-1]}. Revise the plan and task list to explicitly address every "
-                    "rejection reason (sticky-research convention: treat facts you already "
-                    "established as still valid unless the rejection specifically contradicts "
-                    "them).\n"
+                    f"{attempts[-1]}. Revise the plan, task list, and additional-test script "
+                    "to explicitly address every rejection reason (sticky-research convention: "
+                    "treat facts you already established as still valid unless the rejection "
+                    "specifically contradicts them).\n"
                 )
     spec_display = str(spec) if spec is not None else "(none)"
     prompt += (
         f"\nSpec: {spec_display}\n"
         f"Plan: {plan_md}\n"
         f"Tasks JSON: {tasks_json}\n"
+        f"Additional test script: {additional_test}\n"
     )
     return prompt
 
@@ -322,8 +367,12 @@ def _tech_review_prompt(state: FeatureKickoffState) -> str:
     plan_md, tasks_json = _plan_artifact_paths(state)
     spec = _resolve_spec_path(state)
     spec_display = str(spec) if spec is not None else "(none)"
+    additional_test = _additional_test_script_path(Path(state[RUN_DIR_KEY]))
     prompt = (
         "Review the plan and tasks (not the spec's own decisions).\n"
+        "\n"
+        "Confirm the additional-test script exists at the path in the suffix. Do not review "
+        "which tests it runs or whether its scope is complete — existence only.\n"
         "\n"
         "On reject, list each failure as a bullet: reason, then a pointer "
         "(plan section, task id, or file:line).\n"
@@ -338,6 +387,7 @@ def _tech_review_prompt(state: FeatureKickoffState) -> str:
         f"\nSpec: {spec_display}\n"
         f"Plan: {plan_md}\n"
         f"Tasks JSON: {tasks_json}\n"
+        f"Additional test script: {additional_test}\n"
     )
     return prompt
 
@@ -364,6 +414,12 @@ def tech_plan_reviewer(state: FeatureKickoffState) -> dict:
             HALTED_AT_NODE_KEY: TECH_PLAN_REVIEWER_NODE,
         }
     record[RESULT_KEY] = result.result_line
+    script = _additional_test_script_path(run_dir)
+    if not script.is_file() and matches_result_keyword(record[RESULT_KEY] or "", RESULT_ACCEPT):
+        reason = f"{RESULT_REJECT} — additional_test script missing"
+        existing = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
+        _write_output_file(output_path, existing.rstrip() + f"\n\nResult: {reason}\n")
+        record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
     record.update(classify_gate({**state, TECH_PLAN_REVIEWER_NODE: record}, TECH_REVIEW_GATE, TECH_PLAN_REVIEWER_NODE))
     return {TECH_PLAN_REVIEWER_NODE: record}
 
@@ -545,32 +601,15 @@ def run_tasks(state: FeatureKickoffState) -> dict:
     return {MAP_TASK_STATES_KEY: map_task_states}
 
 
-def _final_review_prompt(state: FeatureKickoffState) -> str:
-    prompt = (
-        "Confirm nothing was skipped. Do not re-read exact code diffs/hunks.\n"
-        "\n"
-        "Seed changed files as `git diff --name-only` vs merge-base with the repo default branch "
-        "(origin/HEAD or main), UNION every item's test_scope. Search for modules that **directly "
-        "import** those changed product files (rg/imports; prefer codebase-memory-mcp if connected, "
-        "missing is not a stop). Run the tests those importer files own PLUS the test_scope set. "
-        "Two-hop graph tests that only import a wrapper (e.g. test_feature_kickoff_graph importing "
-        "graph.py not the changed module) are OUT.\n"
-        "\n"
-        "End output.md with the test command you ran, pass or fail (with counts if available), "
-        f"and a single-line `Result: {RESULT_ACCEPT}` or "
-        f"`Result: {RESULT_MANUAL} — <short reason>` conclusion.\n"
-    )
-    child_states = state.get(MAP_TASK_STATES_KEY) or []
-    checklist = "\n".join(
-        f"- {(child.get(ITEM_KEY) or {}).get('id')} "
-        f"({(child.get(ITEM_KEY) or {}).get('title')}): {child.get(OUTCOME_KEY)}"
-        for child in child_states
-    )
-    prompt += (
-        "\nPer-task outcomes from 05_run_tasks:\n"
-        f"{checklist or '(no tasks)'}\n"
-    )
-    return prompt
+def _incomplete_task_ids(state: FeatureKickoffState) -> list[str]:
+    incomplete: list[str] = []
+    for child in state.get(MAP_TASK_STATES_KEY) or []:
+        outcome = child.get(OUTCOME_KEY)
+        if outcome == OUTCOME_SUCCESS:
+            continue
+        item_id = (child.get(ITEM_KEY) or {}).get("id") or "(unknown)"
+        incomplete.append(f"{item_id} ({outcome})")
+    return incomplete
 
 
 def final_review(state: FeatureKickoffState) -> dict:
@@ -580,22 +619,53 @@ def final_review(state: FeatureKickoffState) -> dict:
     attempt = _next_attempt(state, FINAL_REVIEW_NODE)
     output_path = node_output_path(run_dir, FINAL_REVIEW_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
-    result = dispatch_with_retry(
-        retry=0,
-        role=ROLE_GENERAL_PURPOSE,
-        task_prompt=_final_review_prompt(state),
-        output_path=output_path,
-        model=MODEL_CHEAP,
+    script = _additional_test_script_path(run_dir)
+    stderr = ""
+    returncode: Optional[int] = None
+    reasons: list[str] = []
+
+    if not script.is_file():
+        reasons.append(f"additional_test script missing at {script}")
+    else:
+        try:
+            proc = _run_additional_test(script)
+        except FileNotFoundError as exc:
+            stderr = str(exc)
+            returncode = 127
+            reasons.append(f"failed to launch additional_test script: {exc}")
+        else:
+            stderr = proc.stderr or ""
+            returncode = proc.returncode
+            if returncode != 0:
+                reasons.append(f"additional tests failed (exit {returncode})")
+
+    incomplete = _incomplete_task_ids(state)
+    if incomplete:
+        reasons.append("incomplete tasks: " + ", ".join(incomplete))
+
+    record[STDERR_KEY] = stderr
+    record[RETURNCODE_KEY] = returncode
+    stderr_path = output_path.parent / "stderr.txt"
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_path.write_text(stderr, encoding="utf-8")
+
+    if reasons:
+        reason = "; ".join(reasons)
+        result_line = f"{RESULT_MANUAL} — {reason}"
+    else:
+        result_line = RESULT_ACCEPT
+
+    rc_display = "n/a" if returncode is None else str(returncode)
+    _write_output_file(
+        output_path,
+        (
+            f"Additional test script: {script}\n"
+            f"Return code: {rc_display}\n"
+            f"stderr:\n{stderr}\n\n"
+            f"Result: {result_line}\n"
+        ),
     )
-    attach_usage(record, result)
-    if not result.ok:
-        return {
-            FINAL_REVIEW_NODE: record,
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: FINAL_REVIEW_NODE,
-        }
-    record[RESULT_KEY] = result.result_line
+    record[RESULT_KEY] = extract_result_line(output_path.read_text(encoding="utf-8"))
     record.update(classify_gate({**state, FINAL_REVIEW_NODE: record}, FINAL_REVIEW_GATE, FINAL_REVIEW_NODE))
     return {FINAL_REVIEW_NODE: record}
 

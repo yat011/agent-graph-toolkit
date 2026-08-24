@@ -93,7 +93,9 @@ per-dispatch anymore; a bad node/prompt pairing just surfaces as an ordinary tec
 - `unmet_dependencies` — `05_run_tasks`'s sequential map had remaining task items still waiting on
   unfinished `dependencies` (a cycle) with nothing ready to dispatch. A permanently-blocked item
   (a missing dependency id, or one that finished at `manual_flag`) does **not** halt the whole
-  map — it's left `blocked` so `06_final_review` can flag it.
+  map — it's left `blocked` so `06_final_review` can flag it (Python runs the planner's
+  additional-test script and treats a non-zero exit, a missing script, or incomplete mapped
+  tasks as manual).
 - `manual_requested` — a gate's `Result:` line started with `manual`.
 - `reject_attempts_exhausted` — a gate's reject-loop budget was already at the cap.
 - `unrecognized_result` — a gate's `Result:` line matched none of accepted / rejected / manual.

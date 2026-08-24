@@ -12,11 +12,16 @@ class LoadTasksNodeState(GateNodeState, total=False):
     items: list
 
 
+class FinalReviewNodeState(GateNodeState, total=False):
+    stderr: Optional[str]
+    returncode: Optional[int]
+
+
 class FeatureKickoffState(BaseGraphState, total=False):
     spec_path: Optional[str]
     create_feature_branch_node: BasicNodeState
     planner_node: BasicNodeState
     tech_plan_reviewer_node: GateNodeState
     load_tasks_node: LoadTasksNodeState
-    final_review_node: GateNodeState
+    final_review_node: FinalReviewNodeState
     map_task_states: list[StandardTaskState]

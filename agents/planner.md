@@ -43,7 +43,14 @@ file must mirror the plan's `## Tasks` section exactly — same tasks, same test
 dependencies, nothing dropped or invented — and must be kept in sync on every revision (including
 revisions made in response to reviewer feedback).
 
+## 4. Additional-test script
+
+Write a runnable additional-test script at the exact path in the work-order suffix
+(`additional_test.cmd` on Windows, `additional_test.sh` otherwise). It contains the command(s)
+to run tests that may be affected by this plan's changes. A failing test command must make the
+script exit non-zero. Do not run the script.
+
 ## Final report
 
-The plan markdown and tasks JSON files are the deliverable. output.md is a single
+The plan markdown, tasks JSON, and additional-test script are the deliverable. output.md is a single
 `Result: plan written` line.

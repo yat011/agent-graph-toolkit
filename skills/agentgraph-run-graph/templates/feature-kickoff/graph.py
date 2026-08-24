@@ -7,8 +7,8 @@
 
     04_load_tasks
      |-[accepted, env working]-> 05_run_tasks (sequential map: standard-task per task) -> 06_final_review
-     |                                                                                   |-[accepted]------> 09_success
-     |                                                                                   `-[manual/issues]-> 08_needs_manual_review
+     |                                                                                   |-[script exit 0]-> 09_success
+     |                                                                                   `-[script fail/missing]-> 08_needs_manual_review
      `-[manual, env down]--------------------------------------------------------------------------------> 08_needs_manual_review
 
     07_blocked_plan_rejected   (terminal)
