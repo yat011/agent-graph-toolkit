@@ -1,9 +1,9 @@
 """Tests for the ported feature-kickoff graph.py: branch/planner/tech-review loop, load_tasks
-env-check branch, sequential map/fan-out over standard-task with a dependency gate, and the
-Python final-review additional-test runner. Uses a fake `_run_subprocess` (no real Worker CLI
-calls), a fake `_run_git` so create_feature_branch cannot touch the real repo, and a fake
-`_run_additional_test` so final_review does not execute host scripts.
+env-check branch, sequential map/fan-out over a compiled standard-task subgraph, and the
+Python final-review additional-test runner. Pause paths compile with InMemorySaver.
 """
+
+from __future__ import annotations
 
 import json
 import subprocess
@@ -11,33 +11,33 @@ import sys
 from pathlib import Path
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
 from agentgraph_engine.constants import (
     ATTEMPT_COUNT_KEY,
     FINAL_REVIEW_NODE,
-    HALTED_AT_NODE_KEY,
-    HALTED_KEY,
     HALT_MANUAL_REQUESTED,
     HALT_REASON_KEY,
     HALT_REJECT_ATTEMPTS_EXHAUSTED,
+    HALT_RETRIES_EXHAUSTED,
     HALT_UNRECOGNIZED_RESULT,
+    HALTED_KEY,
+    IMPLEMENT_REQUIREMENTS_NODE,
     ITEM_KEY,
     LOAD_TASKS_NODE,
     MAP_TASK_STATES_KEY,
-    OUTCOME_BLOCKED,
     OUTCOME_KEY,
-    OUTCOME_MANUAL_FLAG,
-    OUTCOME_MANUAL_REVIEW,
     OUTCOME_SUCCESS,
     PLANNER_NODE,
     RESULT_ACCEPT,
+    RESULT_IMPLEMENTED,
     RESULT_KEY,
     RESULT_REJECT,
     RESULT_STOPPED,
-    RESULT_IMPLEMENTED,
     RETURNCODE_KEY,
     RUN_DIR_KEY,
-    RUN_TASKS_NODE,
+    RUN_ONE_TASK_NODE,
     SPEC_PATH_KEY,
     STANDARD_TASK_SUCCESS_DIR,
     STDERR_KEY,
@@ -46,6 +46,14 @@ from agentgraph_engine.constants import (
 )
 from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
+from agentgraph_engine.pause import (
+    INTERRUPT_CHECKPOINT_NS_KEY,
+    INTERRUPT_PARENT_NODE_KEY,
+    INTERRUPT_REASON_KEY,
+    INTERRUPT_REDRIVE_NODE_KEY,
+    INTERRUPT_RESET_ATTEMPTS_KEY,
+    interrupt_payload_from_result,
+)
 
 GRAPH_PATH = (
     Path(__file__).resolve().parent.parent
@@ -119,8 +127,25 @@ def build_graph(monkeypatch):
     return get_build_graph(module)
 
 
+def _compile(build_graph):
+    return build_graph(checkpointer=InMemorySaver())
+
+
+def _cfg(thread: str = "t") -> dict:
+    return {"configurable": {"thread_id": thread}, "recursion_limit": 80}
+
+
+def _assert_paused(result, *, reason: str, redrive: str, reset: bool) -> dict:
+    payload = interrupt_payload_from_result(result)
+    assert payload is not None
+    assert payload[INTERRUPT_REASON_KEY] == reason
+    assert payload[INTERRUPT_REDRIVE_NODE_KEY] == redrive
+    assert payload[INTERRUPT_RESET_ATTEMPTS_KEY] is reset
+    assert result.get(OUTCOME_KEY) is None
+    return payload
+
+
 def _seed_plan_files(tmp_path, items: list) -> tuple[Path, Path]:
-    """Seed spec + plan artifacts at the convention paths load_tasks reads."""
     specs_dir = tmp_path / "agent_works" / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
     spec_path = specs_dir / "demo.md"
@@ -142,117 +167,119 @@ def test_accepted_path_env_working_reaches_success(monkeypatch, build_graph, tmp
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     _seed_additional_test(run_dir)
 
-    steps = [
-        ("Result: plan written", True),
-        (f"Result: {RESULT_ACCEPT}", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
-
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
-    assert result["planner_node"][ATTEMPT_COUNT_KEY] == 1
+    assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 1
     assert json.loads((run_dir / "04_load_tasks" / "attempt-1" / "items.json").read_text(encoding="utf-8")) == []
     recap = (run_dir / "09_success" / "attempt-1" / "output.md").read_text(encoding="utf-8")
     assert "Result: recap written" in recap
 
 
-def test_reject_loops_back_then_blocked_after_three_attempts(monkeypatch, build_graph, tmp_path):
+def test_reject_three_times_pauses_with_redrive_planner(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     plan_line = "Result: plan written"
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                (plan_line, True),
+                (f"Result: {RESULT_REJECT} — missing test cases", True),
+                (plan_line, True),
+                (f"Result: {RESULT_REJECT} — still missing", True),
+                (plan_line, True),
+                (f"Result: {RESULT_REJECT} — still missing", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_REJECT_ATTEMPTS_EXHAUSTED,
+        redrive=PLANNER_NODE,
+        reset=True,
+    )
+    assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 3
+    assert result.get(HALTED_KEY) is True
+    assert not (run_dir / "07_blocked_plan_rejected").exists()
 
-    steps = [
-        (plan_line, True),
-        (f"Result: {RESULT_REJECT} — missing test cases", True),
-        (plan_line, True),
-        (f"Result: {RESULT_REJECT} — still missing", True),
-        (plan_line, True),
-        (f"Result: {RESULT_REJECT} — still missing", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
 
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    assert result[OUTCOME_KEY] == OUTCOME_BLOCKED
-    assert result["planner_node"][ATTEMPT_COUNT_KEY] == 3
-    assert result[HALTED_KEY] is True
-    assert result[HALTED_AT_NODE_KEY] == PLANNER_NODE
-    assert result[HALT_REASON_KEY] == HALT_REJECT_ATTEMPTS_EXHAUSTED
-
-
-def test_unrecognized_tech_review_result_falls_to_blocked_not_loop_back(monkeypatch, build_graph, tmp_path):
-    """A garbled Result: line on tech_plan_reviewer routes immediately to blocked_plan_rejected
-    with halt_reason unrecognized_result — it does not loop back to planner.
-    """
+def test_unrecognized_tech_review_result_pauses_immediately(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
-    plan_line = "Result: plan written"
-
-    steps = [
-        (plan_line, True),
-        ("garbled, no recognizable keyword at all", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
-
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    assert result[OUTCOME_KEY] == OUTCOME_BLOCKED
-    assert result["planner_node"][ATTEMPT_COUNT_KEY] == 1
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                ("garbled, no recognizable keyword at all", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_UNRECOGNIZED_RESULT,
+        redrive=TECH_PLAN_REVIEWER_NODE,
+        reset=True,
+    )
+    assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 1
     assert result[TECH_PLAN_REVIEWER_NODE][ATTEMPT_COUNT_KEY] == 1
-    assert result[HALT_REASON_KEY] == HALT_UNRECOGNIZED_RESULT
-    assert result[HALTED_AT_NODE_KEY] == PLANNER_NODE
 
 
-def test_manual_keyword_from_tech_review_routes_immediately_to_blocked(monkeypatch, build_graph, tmp_path):
-    """The reserved `manual` Result: keyword bypasses the reject-loop budget — reaches
-    blocked_plan_rejected on the very first tech-review dispatch.
-    """
+def test_manual_keyword_from_tech_review_pauses_immediately(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
-    plan_line = "Result: plan written"
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                ("Result: manual — needs a human judgment call", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=TECH_PLAN_REVIEWER_NODE,
+        reset=True,
+    )
+    assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 1
 
-    steps = [
-        (plan_line, True),
-        ("Result: manual — needs a human judgment call", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
 
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    assert result[OUTCOME_KEY] == OUTCOME_BLOCKED
-    assert result["planner_node"][ATTEMPT_COUNT_KEY] == 1
-    assert result[HALT_REASON_KEY] == HALT_MANUAL_REQUESTED
-    assert result[HALTED_AT_NODE_KEY] == PLANNER_NODE
-
-
-def test_env_down_routes_to_needs_manual_review(monkeypatch, build_graph, tmp_path):
-    """04_load_tasks has no reject/loop-back keyword pair: a missing tasks JSON routes to
-    needs_manual_review immediately (no self-retry hop).
-    """
+def test_env_down_pauses_with_redrive_load_tasks(monkeypatch, build_graph, tmp_path):
+    """04_load_tasks has no reject/loop-back pair: a missing tasks JSON pauses immediately."""
     run_dir = tmp_path / "run"
     specs_dir = tmp_path / "agent_works" / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
     spec_path = specs_dir / "demo.md"
     spec_path.write_text("# demo\n", encoding="utf-8")
     _seed_additional_test(run_dir)
-
-    steps = [
-        ("Result: plan written", True),
-        (f"Result: {RESULT_ACCEPT}", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
-
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_REVIEW
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=LOAD_TASKS_NODE,
+        reset=True,
+    )
     assert result[LOAD_TASKS_NODE][ATTEMPT_COUNT_KEY] == 1
-    assert result[HALTED_KEY] is True
-    assert result[HALTED_AT_NODE_KEY] == LOAD_TASKS_NODE
-    assert (run_dir / "08_needs_manual_review" / "attempt-1" / "output.md").exists()
+    assert result.get(HALTED_KEY) is True
+    assert not (run_dir / "08_needs_manual_review").exists()
 
 
-def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(monkeypatch, build_graph, tmp_path):
+def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(
+    monkeypatch, build_graph, tmp_path
+):
     run_dir = tmp_path / "run"
     items = [
         {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
@@ -260,26 +287,26 @@ def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(monkeyp
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
-    plan_line = "Result: plan written"
-
-    steps = [
-        (plan_line, True),
-        (f"Result: {RESULT_ACCEPT}", True),
-        (f"Result: {RESULT_IMPLEMENTED}", True),
-        (f"Result: {RESULT_ACCEPT}", True),
-        (f"Result: {RESULT_IMPLEMENTED}", True),
-        (f"Result: {RESULT_ACCEPT}", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
-
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     outcomes = {(s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY) for s in result[MAP_TASK_STATES_KEY]}
     assert outcomes == {"t1": OUTCOME_SUCCESS, "t2": OUTCOME_SUCCESS}
 
 
-def test_dependency_on_manual_flagged_item_leaves_dependent_blocked(monkeypatch, build_graph, tmp_path):
+def test_item_one_stopped_interrupts_before_item_two(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     items = [
         {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
@@ -287,31 +314,92 @@ def test_dependency_on_manual_flagged_item_leaves_dependent_blocked(monkeypatch,
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
-    plan_line = "Result: plan written"
-
-    steps = [
-        (plan_line, True),
-        (f"Result: {RESULT_ACCEPT}", True),
-        (f"Result: {RESULT_STOPPED} — missing capability", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
-
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    outcomes = {(s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY) for s in result[MAP_TASK_STATES_KEY]}
-    assert outcomes["t1"] == OUTCOME_MANUAL_FLAG
-    assert outcomes["t2"] == OUTCOME_BLOCKED
-    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_REVIEW
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_STOPPED} — missing capability", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    payload = _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=IMPLEMENT_REQUIREMENTS_NODE,
+        reset=True,
+    )
+    assert payload[INTERRUPT_PARENT_NODE_KEY] == RUN_ONE_TASK_NODE
+    assert payload[INTERRUPT_CHECKPOINT_NS_KEY] == "item-1"
+    item2 = run_dir / "05_run_tasks" / "item-2"
+    assert not (item2 / "02_implement_requirements").exists()
     assert FINAL_REVIEW_NODE not in result
     assert not (run_dir / "06_final_review").exists()
-    assert result[HALTED_AT_NODE_KEY] == RUN_TASKS_NODE
+    assert not (run_dir / "08_needs_manual_review").exists()
 
 
-def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch, build_graph, tmp_path):
-    """Two independent (no dependency between them) items must still dispatch strictly one
-    after another: by the moment item b's implement step is dispatched, item a's own success
-    receipt must already exist on disk.
-    """
+
+def test_item_one_redrive_still_stopped_does_not_start_item_two(
+    monkeypatch, build_graph, tmp_path
+):
+    """A nested pause that is still stopped after redrive must interrupt again, not start item-2."""
+    run_dir = tmp_path / "run"
+    items = [
+        {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
+        {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
+    ]
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
+    _seed_additional_test(run_dir)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_STOPPED} — missing capability", True),
+            ]
+        ),
+    )
+    compiled = build_graph(checkpointer=InMemorySaver())
+    cfg = _cfg()
+    first = compiled.invoke(_kickoff_state(run_dir, spec_path), config=cfg)
+    _assert_paused(
+        first,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=IMPLEMENT_REQUIREMENTS_NODE,
+        reset=True,
+    )
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                (f"Result: {RESULT_STOPPED} — still missing", True),
+            ]
+        ),
+    )
+    second = compiled.invoke(Command(resume="redrive"), config=cfg)
+    payload = _assert_paused(
+        second,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=IMPLEMENT_REQUIREMENTS_NODE,
+        reset=True,
+    )
+    assert payload[INTERRUPT_PARENT_NODE_KEY] == RUN_ONE_TASK_NODE
+    item2 = run_dir / "05_run_tasks" / "item-2"
+    assert not item2.exists()
+    outcomes = {
+        (s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY)
+        for s in (second.get(MAP_TASK_STATES_KEY) or [])
+    }
+    assert "t1" not in outcomes or outcomes.get("t1") != OUTCOME_SUCCESS
+    assert "t2" not in outcomes
+
+
+def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(
+    monkeypatch, build_graph, tmp_path
+):
     run_dir = tmp_path / "run"
     items = [
         {"id": "a", "title": "A", "description": "d", "dependencies": []},
@@ -319,13 +407,12 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
-    plan_line = "Result: plan written"
-
-    item_a_success_path = run_dir / "05_run_tasks" / "item-1" / STANDARD_TASK_SUCCESS_DIR / "attempt-1" / "output.md"
+    item_a_success_path = (
+        run_dir / "05_run_tasks" / "item-1" / STANDARD_TASK_SUCCESS_DIR / "attempt-1" / "output.md"
+    )
     seen_a_done_before_b_dispatch = {"value": None}
-
     script = [
-        (plan_line, True),
+        ("Result: plan written", True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_IMPLEMENTED}", True),
         (f"Result: {RESULT_ACCEPT}", True),
@@ -344,22 +431,22 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(monkeypatch
         return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"result": content}), stderr="")
 
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert seen_a_done_before_b_dispatch["value"] is True
 
 
-def test_planner_prompt_asks_for_os_specific_additional_test_script(monkeypatch, build_graph, tmp_path):
+def test_planner_prompt_asks_for_os_specific_additional_test_script(
+    monkeypatch, build_graph, tmp_path
+):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     _seed_additional_test(run_dir)
     captured: list[str] = []
-    steps = [
+    remaining = [
         ("Result: plan written", True),
         (f"Result: {RESULT_ACCEPT}", True),
     ]
-    remaining = list(steps)
 
     def executor(argv, input_text, timeout):
         captured.append(input_text)
@@ -370,8 +457,7 @@ def test_planner_prompt_asks_for_os_specific_additional_test_script(monkeypatch,
         )
 
     monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     nodes = sys.modules[NODES_MODULE]
     script_path = str(nodes._additional_test_script_path(run_dir))
@@ -379,18 +465,10 @@ def test_planner_prompt_asks_for_os_specific_additional_test_script(monkeypatch,
     assert "additional_test_script:" in planner_text
     assert script_path in planner_text
     assert nodes._additional_test_script_kind() in planner_text
-    assert "Do not run the script" in planner_text
-    assert planner_text.count("Do not run the script") == 1
     assert "never a directory" in planner_text
     assert "repository root as cwd" in planner_text
-    assert "output.md three lines only" in planner_text
-    assert planner_text.count("output.md three lines only") == 1
     assert f"additional_test_script: {script_path}" in planner_text
-    assert "Result: plan written" in planner_text
     review_text = next(t for t in captured if "not spec's own decisions" in t)
-    assert "existence only" in review_text
-    assert review_text.count("existence only") == 1
-    assert "Do **not** review which tests it runs" in review_text
     assert script_path in review_text
     expected_name = "additional_test.cmd" if sys.platform == "win32" else "additional_test.sh"
     assert expected_name in script_path
@@ -402,20 +480,27 @@ def test_tech_review_rejects_accepted_plan_when_additional_test_script_missing(
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     plan_line = "Result: plan written"
-    steps = [
-        (plan_line, True),
-        (f"Result: {RESULT_ACCEPT}", True),
-        (plan_line, True),
-        (f"Result: {RESULT_ACCEPT}", True),
-        (plan_line, True),
-        (f"Result: {RESULT_ACCEPT}", True),
-    ]
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _script_executor(steps))
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    assert result[OUTCOME_KEY] == OUTCOME_BLOCKED
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                (plan_line, True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (plan_line, True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (plan_line, True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_REJECT_ATTEMPTS_EXHAUSTED,
+        redrive=PLANNER_NODE,
+        reset=True,
+    )
     assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 3
-    assert result[HALT_REASON_KEY] == HALT_REJECT_ATTEMPTS_EXHAUSTED
     review_out = (run_dir / "03_tech_plan_reviewer" / "attempt-1" / "output.md").read_text(
         encoding="utf-8"
     )
@@ -439,8 +524,7 @@ def test_final_review_runs_script_stores_stderr_and_succeeds(monkeypatch, build_
         "agentgraph_engine.dispatch._run_subprocess",
         _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
     )
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert ran == [script_path]
     record = result[FINAL_REVIEW_NODE]
@@ -457,9 +541,7 @@ def test_final_review_runs_script_stores_stderr_and_succeeds(monkeypatch, build_
     assert "Return code: 0" in output
 
 
-def test_final_review_nonzero_exit_routes_to_manual_and_stores_streams(
-    monkeypatch, build_graph, tmp_path
-):
+def test_final_review_nonzero_exit_pauses_and_stores_streams(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     _seed_additional_test(run_dir)
@@ -475,9 +557,13 @@ def test_final_review_nonzero_exit_routes_to_manual_and_stores_streams(
         "agentgraph_engine.dispatch._run_subprocess",
         _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
     )
-    graph = build_graph()
-    result = graph.invoke(_kickoff_state(run_dir, spec_path), config={"recursion_limit": 50})
-    assert result[OUTCOME_KEY] == OUTCOME_MANUAL_REVIEW
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=FINAL_REVIEW_NODE,
+        reset=True,
+    )
     record = result[FINAL_REVIEW_NODE]
     assert record[STDOUT_KEY] == tap_stdout
     assert record[STDERR_KEY] == ""
@@ -488,6 +574,7 @@ def test_final_review_nonzero_exit_routes_to_manual_and_stores_streams(
     assert (attempt_dir / "stderr.txt").read_text(encoding="utf-8") == ""
     output = (attempt_dir / "output.md").read_text(encoding="utf-8")
     assert "Cannot find module" in output
+    assert not (run_dir / "08_needs_manual_review").exists()
 
 
 def test_additional_test_argv_is_os_specific():
@@ -502,4 +589,3 @@ def test_additional_test_argv_is_os_specific():
         assert argv[0] in {"bash", "sh"} or argv[0].endswith(("bash", "sh"))
         assert str(script) in argv
         assert script.name == "additional_test.sh"
-

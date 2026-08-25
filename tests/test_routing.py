@@ -10,7 +10,7 @@ from agentgraph_engine.constants import (
     IMPLEMENT_REQUIREMENTS_NODE,
     LOOP_BACK,
     MANUAL,
-    MANUAL_FLAG_NODE,
+    PAUSE_NODE,
     RESULT_ACCEPT,
     RESULT_KEY,
     RESULT_MANUAL,
@@ -70,20 +70,20 @@ def test_classify_gate_unrecognized_is_immediate_manual():
 def test_gate_route_reads_nested_route_field():
     accept_state = {REVIEW_NODE: {ROUTE_KEY: ACCEPT}}
     assert (
-        gate_route(accept_state, REVIEW_GATE, REVIEW_NODE, accept_target=SUCCESS_NODE, manual_target=MANUAL_FLAG_NODE)
+        gate_route(accept_state, REVIEW_GATE, REVIEW_NODE, accept_target=SUCCESS_NODE, manual_target=PAUSE_NODE)
         == SUCCESS_NODE
     )
 
     loop_state = {REVIEW_NODE: {ROUTE_KEY: LOOP_BACK}}
     assert (
-        gate_route(loop_state, REVIEW_GATE, REVIEW_NODE, accept_target=SUCCESS_NODE, manual_target=MANUAL_FLAG_NODE)
+        gate_route(loop_state, REVIEW_GATE, REVIEW_NODE, accept_target=SUCCESS_NODE, manual_target=PAUSE_NODE)
         == IMPLEMENT_REQUIREMENTS_NODE
     )
 
     manual_state = {REVIEW_NODE: {ROUTE_KEY: MANUAL}}
     assert (
-        gate_route(manual_state, REVIEW_GATE, REVIEW_NODE, accept_target=SUCCESS_NODE, manual_target=MANUAL_FLAG_NODE)
-        == MANUAL_FLAG_NODE
+        gate_route(manual_state, REVIEW_GATE, REVIEW_NODE, accept_target=SUCCESS_NODE, manual_target=PAUSE_NODE)
+        == PAUSE_NODE
     )
 
 

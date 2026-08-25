@@ -22,5 +22,8 @@ class BaseGraphState(TypedDict, total=False):
     halted: bool
     halt_reason: Optional[str]
     halted_at_node: Optional[str]
+    redrive_node: Optional[str]
+    reset_attempts: bool
+    redrive_message: Optional[str]
     outcome: Optional[str]
     worker_cli: Optional[str]

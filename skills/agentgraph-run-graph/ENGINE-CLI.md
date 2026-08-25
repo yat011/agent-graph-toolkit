@@ -66,40 +66,52 @@ Prints the Run's current checkpointed state: `{"run_path": ..., "next": [...], "
 `next` is the node(s) LangGraph would run on the next `invoke`/`resume` call (empty if the Run
 reached `END`).
 
-### `agentgraph redrive --run <run_path> [--recursion-limit N] [--cli claude|grok|cursor]`
+### `agentgraph redrive --run <run_path> [--message <text>] [--recursion-limit N] [--cli claude|grok|cursor]`
 
-Re-attempts a **halted** Run's failing node fresh, without re-running anything upstream of it.
-Every halting node records its own node name as `halted_at_node` in state; `redrive` walks the
-checkpoint history (`compiled.get_state_history()`) for the most recent snapshot whose `.next`
-is exactly that node, clears the halt fields there, and forks execution forward from that point.
-Errors (exit 1, JSON `{"status":"error", ...}`) if the Run isn't halted, or `halted_at_node`
-wasn't recorded.
+Continues a **paused** Run (`interrupt()` at `pause_node` or inside a nested-task wrapper) or
+re-attempts a **halted** hello_graph sink.
 
-When the halt being redriven is a gate-manual reason (`manual_requested`,
-`reject_attempts_exhausted`, `unrecognized_result`), every nested node record that has an
-`attempt_count` is zeroed so the loop restarts clean. An ordinary `retries_exhausted` halt
-does not reset counters.
+If the checkpoint has interrupts, `redrive` issues `Command(resume=...)`. The pause node
+(or nested map wrapper) then `Command(goto=redrive_node, update=...)`. Every pause zeroes nested
+`attempt_count` so a redrive cannot immediately re-hit the same cap. `--message` is stored as
+`redrive_message` and appended to the target node's Worker prompt (use it to tell a reviewer a
+finding is non-blocking, etc.). `redrive_node` in the interrupt payload is the jump target:
+the **gate itself** after `Result: manual` / unrecognized; the **writer** after reject budget;
+the **failed node** after a technical death.
 
-An unrecognized `Result:` line on a gate is `unrecognized_result` and routes to manual
-**immediately** — there is no self-retry hop.
+Time-travel (`get_state_history` + `update_state` + `invoke(None)`) remains only for graphs that
+still END on a technical halt (hello_graph). Production templates pause instead of routing to END.
 
-## Halting
+An unrecognized `Result:` line on a gate is `unrecognized_result` and pauses **immediately** —
+there is no self-retry hop.
 
-There is no `capability_gap` halt — there's no coordinating LLM positioned to make that judgment
-per-dispatch anymore; a bad node/prompt pairing just surfaces as an ordinary technical failure.
+## Halting vs pausing
+
+Production templates (`feature-kickoff`, `standard-task`) **pause** with `interrupt()` instead of
+routing to a dead-end terminal. The CLI summary then has `interrupted: true` (and usually
+`halted: true` as well — halt fields record *why* and *where to redrive*). Use `agentgraph redrive`
+to continue. `agentgraph resume --resume-value` is for author-placed interrupts that expect a
+resume value (hello_graph's checkpoint gate).
+
+hello_graph still ENDs on a technical Worker death (`halted` sink). That path keeps the
+time-travel redrive fallback.
+
+Halt / pause reasons:
 
 - `retries_exhausted` — a node's headless-CLI dispatch failed (non-zero exit, or the worker
-  didn't write its required output file) more times than its `retry` count allows.
-- `unmet_dependencies` — `05_run_tasks`'s sequential map had remaining task items still waiting on
-  unfinished `dependencies` (a cycle) with nothing ready to dispatch. A permanently-blocked item
-  (a missing dependency id, or one that finished at `manual_flag`) does **not** halt the whole
-  map — it's left `blocked` so `06_final_review` can flag it (Python runs the planner's
-  additional-test script and treats a non-zero exit, a missing script, or incomplete mapped
-  tasks as manual).
-- `manual_requested` — a gate's `Result:` line started with `manual`.
-- `reject_attempts_exhausted` — a gate's reject-loop budget was already at the cap.
+  didn't write its required output file) more times than its `retry` count allows. Redrive target:
+  the failed node; attempt counters **are** reset.
+- `unmet_dependencies` — the sequential map had remaining items still waiting on unfinished
+  `dependencies` (a cycle) with nothing ready to dispatch. A missing dependency id is left
+  `blocked` rather than pausing the whole map. A **paused** upstream item interrupts the map
+  immediately so later items do not keep running.
+- `manual_requested` — a gate's `Result:` line started with `manual` (or implement `Result: stopped`).
+  Redrive target: the **gate** (`review` / `tech_plan_reviewer`); implement `stopped` still redrives
+  implement. Attempt counters reset. Pass `--message` to instruct the reviewer.
+- `reject_attempts_exhausted` — a gate's reject-loop budget was already at the cap. Redrive
+  target: the code-writer; attempt counters reset.
 - `unrecognized_result` — a gate's `Result:` line matched none of accepted / rejected / manual.
-  Routes to manual immediately; no self-retry hop.
+  Pauses immediately; no self-retry hop. Redrive target: the **gate**; attempt counters reset.
 
 ## Branch judgment
 
@@ -120,12 +132,16 @@ like any other — if a dispatch's permission mode still blocks the write it nee
 
 ## Map/fan-out and subgraph composition
 
-`05_run_tasks` (in `feature-kickoff`) is a single graph node that loops over its task items
-**sequentially** (no concurrent dispatch) and, for each ready item, invokes the `standard-task`
-template's own compiled `StateGraph` directly as a Python call — a compiled `StateGraph` embeds
-as a node inside a parent graph, no subfolder-per-composed-piece, no new node type to learn. Each
-item's own artifacts land under
-`{run_dir}/05_run_tasks/item-{n}/` using the same `{node_id}/attempt-{n}/output.md` convention as
-every other node, so a partially-completed map is inspectable and (via an on-disk idempotency
-check keyed on that path) does not re-dispatch an item whose nested run already reached a terminal
-on an earlier pass.
+`pick_next_task` / `run_one_task` (in `feature-kickoff`) replace a Python loop over
+`standard-task`. `run_one_task` invokes a **compiled** `standard-task` graph that shares the
+parent's checkpointer, each item on its own `thread_id` (`{parent}:{item-n}`). If the child
+pauses, the wrapper `interrupt()`s immediately so later map items do not keep running. On
+`agentgraph redrive`, the wrapper resumes the child with `Command(resume="redrive")` inside that
+item's thread. Permanently blocked items (missing dependency id) are left `blocked` and not
+dispatched. A paused upstream item stops the map (interrupt), it is not treated as done.
+
+Each item's artifacts land under `{run_dir}/05_run_tasks/item-{n}/` using the same
+`{node_id}/attempt-{n}/output.md` convention as every other node. On-disk idempotency only treats
+a nested `04_success` receipt as done — a paused item is re-entered, not skipped.
+
+`interrupt()` requires a checkpointer (`InMemorySaver` in tests; sqlite per Run in the CLI).

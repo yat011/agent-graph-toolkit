@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from agentgraph_engine.pause import pause as pause
+
 
 def halted(state: dict) -> dict:
-    """No-op terminal. Routing already recorded halt fields on the graph-level state."""
+    """No-op terminal used by hello_graph. Production templates pause via `pause` instead."""
     return {}

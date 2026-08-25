@@ -6,16 +6,14 @@ from pathlib import Path
 
 from agentgraph_engine.constants import (
     ATTEMPT_COUNT_KEY,
-    HALTED_AT_NODE_KEY,
-    HALTED_KEY,
-    HALT_MANUAL_REVIEW_NEEDED,
+    HALT_MANUAL_REQUESTED,
     HALT_REASON_KEY,
     HALT_RETRIES_EXHAUSTED,
+    HALT_UNRECOGNIZED_RESULT,
     IMPLEMENT_REQUIREMENTS_NODE,
     ITEM_KEY,
     MANUAL,
     OUTCOME_KEY,
-    OUTCOME_MANUAL_FLAG,
     OUTCOME_SUCCESS,
     OUTPUT_PATH_KEY,
     RESULT_ACCEPT,
@@ -27,18 +25,18 @@ from agentgraph_engine.constants import (
     REVIEW_NODE,
     ROUTE_KEY,
     RUN_DIR_KEY,
-    STANDARD_TASK_MANUAL_FLAG_DIR,
     STANDARD_TASK_SUCCESS_DIR,
+    REDRIVE_MESSAGE_KEY,
 )
 from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
-from agentgraph_engine.routing import classify_gate
+from agentgraph_engine.pause import gate_redrive_node, halt_fields, redrive_note_block
+from agentgraph_engine.routing import classify_gate, matches_result_keyword
 from agentgraph_engine.runs import node_output_path
 from agentgraph_engine.states.standard_task import StandardTaskState
 
 IMPLEMENT_NODE_DIR = "02_implement_requirements"
 REVIEW_NODE_DIR = "03_review"
 SUCCESS_NODE_DIR = STANDARD_TASK_SUCCESS_DIR
-MANUAL_FLAG_NODE_DIR = STANDARD_TASK_MANUAL_FLAG_DIR
 
 
 def _record(state: dict, node_id: str) -> dict:
@@ -103,10 +101,9 @@ def _implement_prompt(state: StandardTaskState, attempt: int, run_dir: Path) -> 
             f"{latest_self}. Scope fresh investigation to exactly what the rejection's findings "
             "require re-checking.\n"
         )
+    prompt += redrive_note_block(state)
     return prompt
-
-
-def _review_prompt(run_dir: Path) -> str:
+def _review_prompt(state: StandardTaskState, run_dir: Path) -> str:
     node_dir = run_dir / IMPLEMENT_NODE_DIR
     latest = None
     if node_dir.exists():
@@ -127,6 +124,7 @@ def _review_prompt(run_dir: Path) -> str:
         "`<task-id>: <title>`.\n"
     )
     prompt += f"\nImplement output.md: {latest_display}\n"
+    prompt += redrive_note_block(state)
     return prompt
 
 
@@ -145,12 +143,29 @@ def implement_requirements(state: StandardTaskState) -> dict:
     if not result.ok:
         return {
             IMPLEMENT_REQUIREMENTS_NODE: record,
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: IMPLEMENT_REQUIREMENTS_NODE,
+            REDRIVE_MESSAGE_KEY: None,
+            **halt_fields(
+                reason=HALT_RETRIES_EXHAUSTED,
+                redrive_node=IMPLEMENT_REQUIREMENTS_NODE,
+            ),
         }
     record[RESULT_KEY] = result.result_line
-    return {IMPLEMENT_REQUIREMENTS_NODE: record}
+    update = {IMPLEMENT_REQUIREMENTS_NODE: record}
+    if not matches_result_keyword(result.result_line, RESULT_IMPLEMENTED):
+        reason = (
+            HALT_MANUAL_REQUESTED
+            if matches_result_keyword(result.result_line, RESULT_STOPPED)
+            else HALT_UNRECOGNIZED_RESULT
+        )
+        update.update(
+            halt_fields(
+                reason=reason,
+                redrive_node=IMPLEMENT_REQUIREMENTS_NODE,
+                reset_attempts=True,
+            )
+        )
+    update[REDRIVE_MESSAGE_KEY] = None
+    return update
 
 
 def review(state: StandardTaskState) -> dict:
@@ -163,20 +178,35 @@ def review(state: StandardTaskState) -> dict:
     result = dispatch_with_retry(
         retry=1,
         role="reviewer",
-        task_prompt=_review_prompt(run_dir),
+        task_prompt=_review_prompt(state, run_dir),
         output_path=output_path,
     )
     attach_usage(record, result)
     if not result.ok:
         return {
             REVIEW_NODE: record,
-            HALTED_KEY: True,
-            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
-            HALTED_AT_NODE_KEY: REVIEW_NODE,
+            REDRIVE_MESSAGE_KEY: None,
+            **halt_fields(
+                reason=HALT_RETRIES_EXHAUSTED,
+                redrive_node=REVIEW_NODE,
+            ),
         }
     record[RESULT_KEY] = result.result_line
     record.update(classify_gate({**state, REVIEW_NODE: record}, REVIEW_GATE, REVIEW_NODE))
-    return {REVIEW_NODE: record}
+    update = {REVIEW_NODE: record}
+    if record.get(ROUTE_KEY) == MANUAL:
+        update.update(
+            halt_fields(
+                reason=record[HALT_REASON_KEY],
+                redrive_node=gate_redrive_node(
+                    halt_reason=record[HALT_REASON_KEY],
+                    writer=IMPLEMENT_REQUIREMENTS_NODE,
+                    gate=REVIEW_NODE,
+                ),
+            )
+        )
+    update[REDRIVE_MESSAGE_KEY] = None
+    return update
 
 
 def success(state: StandardTaskState) -> dict:
@@ -189,19 +219,3 @@ def success(state: StandardTaskState) -> dict:
         encoding="utf-8",
     )
     return {OUTCOME_KEY: OUTCOME_SUCCESS}
-
-
-def manual_flag(state: StandardTaskState) -> dict:
-    run_dir = Path(state[RUN_DIR_KEY])
-    output_path = node_output_path(run_dir, MANUAL_FLAG_NODE_DIR, 1)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("Result: flagged\n", encoding="utf-8")
-    review_record = _record(state, REVIEW_NODE)
-    if review_record.get(ROUTE_KEY) == MANUAL:
-        return {
-            OUTCOME_KEY: OUTCOME_MANUAL_FLAG,
-            HALTED_KEY: True,
-            HALT_REASON_KEY: review_record.get(HALT_REASON_KEY, HALT_MANUAL_REVIEW_NEEDED),
-            HALTED_AT_NODE_KEY: IMPLEMENT_REQUIREMENTS_NODE,
-        }
-    return {OUTCOME_KEY: OUTCOME_MANUAL_FLAG}

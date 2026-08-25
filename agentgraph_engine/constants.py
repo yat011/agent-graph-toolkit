@@ -24,7 +24,8 @@ GATE_HALT_REASONS = {
     HALT_UNRECOGNIZED_RESULT,
 }
 
-# Mechanism vocabulary — the shared no-op terminal node id and nested record key for Result: lines.
+# Mechanism vocabulary — pause (interrupt) node id, leftover no-op terminal, Result: key.
+PAUSE_NODE = "pause_node"
 HALTED_NODE = "halted_node"
 RESULT_KEY = "result_line"
 
@@ -32,6 +33,11 @@ RESULT_KEY = "result_line"
 HALTED_KEY = "halted"
 HALT_REASON_KEY = "halt_reason"
 HALTED_AT_NODE_KEY = "halted_at_node"
+REDRIVE_NODE_KEY = "redrive_node"
+RESET_ATTEMPTS_KEY = "reset_attempts"
+REDRIVE_MESSAGE_KEY = "redrive_message"
+CURRENT_ITEM_KEY = "current_item"
+CURRENT_ITEM_INDEX_KEY = "current_item_index"
 ATTEMPT_COUNT_KEY = "attempt_count"
 OUTPUT_PATH_KEY = "output_path"
 ROUTE_KEY = "route"
@@ -47,8 +53,6 @@ STDERR_KEY = "stderr"
 STDOUT_KEY = "stdout"
 RETURNCODE_KEY = "returncode"
 
-# Mechanism vocabulary — fallback halt_reason when a gate record has no more specific reason.
-HALT_MANUAL_REVIEW_NEEDED = "manual_review_needed"
 
 # Mechanism vocabulary — dispatch role / model aliases used by more than one graph.
 ROLE_GENERAL_PURPOSE = "general-purpose"
@@ -63,7 +67,6 @@ WORKER_CLI_CURSOR_BINARY = "cursor-agent"
 
 # On-disk attempt-folder names for a nested standard-task run.
 STANDARD_TASK_SUCCESS_DIR = "04_success"
-STANDARD_TASK_MANUAL_FLAG_DIR = "05_manual_flag"
 
 # Business vocabulary — Result: phrases used identically by every gate in both templates.
 RESULT_ACCEPT = "accepted"
@@ -76,22 +79,18 @@ RESULT_STOPPED = "stopped"
 
 # Business vocabulary — graph outcome values (not node ids).
 OUTCOME_SUCCESS = "success"
-OUTCOME_MANUAL_FLAG = "manual_flag"
 OUTCOME_BLOCKED = "blocked"
-OUTCOME_MANUAL_REVIEW = "manual_review"
 
 # standard-task production node ids.
 IMPLEMENT_REQUIREMENTS_NODE = "implement_requirements_node"
 REVIEW_NODE = "review_node"
 SUCCESS_NODE = "success_node"
-MANUAL_FLAG_NODE = "manual_flag_node"
 
 # feature-kickoff production node ids.
 CREATE_FEATURE_BRANCH_NODE = "create_feature_branch_node"
 PLANNER_NODE = "planner_node"
 TECH_PLAN_REVIEWER_NODE = "tech_plan_reviewer_node"
 LOAD_TASKS_NODE = "load_tasks_node"
-RUN_TASKS_NODE = "run_tasks_node"
+PICK_NEXT_TASK_NODE = "pick_next_task_node"
+RUN_ONE_TASK_NODE = "run_one_task_node"
 FINAL_REVIEW_NODE = "final_review_node"
-BLOCKED_PLAN_REJECTED_NODE = "blocked_plan_rejected_node"
-NEEDS_MANUAL_REVIEW_NODE = "needs_manual_review_node"

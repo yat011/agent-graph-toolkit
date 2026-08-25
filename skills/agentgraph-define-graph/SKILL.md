@@ -72,28 +72,28 @@ cover the work end to end. For each unit of work, decide:
     `agentgraph_engine.dispatch.dispatch_with_retry(retry=N, role=..., task_prompt=..., output_path=...)`
     and returns a state update built from the result. Use for any discrete, one-shot piece of
     Worker work (implement a thing, review a thing, write a doc). If `dispatch_with_retry`'s result
-    isn't `ok`, the node must return `{"halted": True, "halt_reason": "retries_exhausted",
-    "halted_at_node": "<this node's own name>"}` (the `halted_at_node` field is required —
-    `agentgraph`'s `redrive` command depends on it to find the right checkpoint to replay from).
+    isn't `ok`, the node must return halt fields (`halted`, `halt_reason: "retries_exhausted"`,
+    `redrive_node` = this node's own name, `reset_attempts: True`) and route to `pause_node`
+    (`agentgraph_engine.pause.pause`), which `interrupt()`s. Do not add a dead-end halt/manual
+    terminal wired to `END`. `agentgraph redrive` resumes the pause (`Command(resume="redrive")`)
+    then `Command(goto=redrive_node)`.
     A **receipt** node (the old engine's `receipt: true`) is a node function that writes its own
     `output.md` directly (no dispatch) — see `standard-task/graph.py`'s `success` node.
   - **Map/fan-out node** — a node function that loops **sequentially** (no concurrent dispatch,
     per this migration's settled design) over a list already present in state (produced by an
     earlier node), dispatching or recursing once per item. Honor an item's own `dependencies`
-    list (other item ids) the same way `feature-kickoff/graph.py`'s `run_tasks` does: skip an item
-    until every listed dependency has reached a success terminal; leave an item permanently
-    blocked (never dispatched) if a dependency is missing or itself ended at a non-success
-    terminal, rather than halting the whole map; halt with `halt_reason: "unmet_dependencies"`
-    only if nothing is ready and something is still waiting (a cycle).
-  - **Subgraph node** — a node function that loads another graph via
-    `agentgraph_engine.graph_loader.load_graph_module` + `get_build_graph` (a fixed path known at
-    authoring time — the dynamic-target case the old `ref_from` convention covered doesn't need a
-    special mechanism here: it's just choosing which path string to load at runtime, ordinary
-    Python) and calls `.invoke()` on the compiled result, folding its final state into this node's
-    own return value — reusable subgraph composition with no subfolder-per-composed-piece, just a
-    Python function call. A map node whose per-item work is
-    itself a full graph (the old "map-of-subgraphs") combines both: loop sequentially, invoke the
-    subgraph once per item — see `feature-kickoff/graph.py`'s `run_tasks`.
+    list (other item ids) the same way `feature-kickoff/graph.py`'s `pick_next_task` does: skip an
+    item until every listed dependency has reached a success terminal; leave an item permanently
+    blocked (never dispatched) if a dependency id is missing; if a nested item **pauses**,
+    `interrupt()` immediately so later items do not keep running; pause with
+    `halt_reason: "unmet_dependencies"` only if nothing is ready and something is still waiting
+    (a cycle).
+  - **Subgraph node** — compile the child with the **same checkpointer** as the parent
+    (`get_build_graph(...)(checkpointer=checkpointer)`). Invoke it with a per-item `thread_id`
+    (feature-kickoff uses `{parent_thread}:{item-n}`). If the child `interrupt()`s, the wrapper
+    must `interrupt()` too — do not swallow `__interrupt__` and continue the map. Never
+    `.invoke()` a compiled subgraph without a checkpointer if that subgraph can pause. See
+    `feature-kickoff/graph.py`'s `pick_next_task` / `run_one_task`.
 - **Branches** — add a router function (`def route_after_x(state) -> str`) wherever the plan
   implies a decision point. Every node a router reads from must have its dispatch prompt instruct
   the subagent to end its output with a single-line `Result: <short phrase>` conclusion
@@ -133,9 +133,12 @@ a user graph) as plain LangGraph code:
 - One node function per node (dispatch nodes call `agentgraph_engine.dispatch.dispatch_with_retry`
   — never hand-roll a `subprocess` call), one router function per branching node. Do not
   introduce a generic node factory.
-- `graph.add_node(...)` for every node (including a shared no-op `halted` node if any node can
-  halt, wired to `END`), `graph.add_edge`/`graph.add_conditional_edges` for every transition,
-  `graph.add_edge(START, ...)` for the entry node.
+- `graph.add_node(...)` for every node (including a shared `pause_node` that calls
+  `agentgraph_engine.pause.pause` if any node can pause — do not add dead-end
+  `manual_flag` / `blocked` / `needs_manual_review` terminals wired to `END`),
+  `graph.add_edge`/`graph.add_conditional_edges` for every transition,
+  `graph.add_edge(START, ...)` for the entry node. Command-returning nodes should declare
+  `destinations=`. `interrupt()` requires compiling with a checkpointer.
 - `def build_graph(checkpointer=None): ... return graph.compile(checkpointer=checkpointer)`, plus a
   module-level `graph = build_graph()` for direct import in tests/tools that don't need a
   checkpointer.
@@ -180,9 +183,12 @@ would look like.
 These carry over from the retired `graph.md` engine, translated to Python:
 
 - **Loops must self-limit.** Any router that can route back to an earlier node must check a
-  bounded attempt counter (a state int field incremented once per entry into the looped node) and
-  route to a non-looping terminal past a fixed cap — there is no global execution cap and no human
-  in the loop to interrupt a runaway graph.
+  bounded attempt counter (a state int field incremented once per entry into the looped node).
+  When the cap is hit, pause with `interrupt()` (`redrive_node` = the code-writer,
+  `reset_attempts: True`). Gate `Result: manual` / unrecognized pause with `redrive_node` =
+  that gate so `agentgraph redrive --message` can instruct the reviewer. Do not route to a
+  dead-end terminal. `agentgraph redrive` then `Command(goto=redrive_node)` with counters
+  zeroed. There is no global execution cap.
 - **Result-line convention.** Every dispatch node a router reads from must have its prompt end
   with a single-line `Result: <phrase>` conclusion; the router does plain string matching against
   the literal phrases you told the prompt to produce.

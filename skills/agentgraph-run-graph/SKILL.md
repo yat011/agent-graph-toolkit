@@ -29,12 +29,13 @@ the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
   `importlib`, exactly where it already lives.
 - Optionally, "start fresh" / "new run" — just call `agentgraph start` again; it always creates a
   new `run_id`, never silently reuses an old one.
-- Optionally, "redrive `{graph-name}`" to resume a **halted** run after fixing whatever caused it —
-  `agentgraph redrive --run {run_path}`. A halted run is never auto-resumed without this explicit
-  ask.
-- Optionally, "resume `{run_path}`" for a run **paused at an `interrupt()`** (a deliberate
-  checkpoint a graph author put in — distinct from a halt; see below) — `agentgraph resume --run
-  {run_path} [--resume-value {value}]`.
+- Optionally, "redrive `{graph-name}`" to continue a **paused** production run (gate reject
+  budget, `Result: manual` / unrecognized, Worker death, nested-task interrupt) or a **halted**
+  hello_graph sink, after the user fixes the cause — `agentgraph redrive --run {run_path}`. Never
+  auto-redrive.
+- Optionally, "resume `{run_path}`" for an author-placed `interrupt()` that expects a resume
+  value (hello_graph's checkpoint gate) — `agentgraph resume --run {run_path} [--resume-value
+  {value}]`. Production template pauses use `redrive`, not `resume`.
 
 ## Starting a run
 
@@ -56,58 +57,52 @@ guess:
 
 ## Interpreting the terminal result
 
-- **`outcome` set, `halted: false`, no `interrupted`** — the run reached a real terminal (e.g.
-  `success`, `blocked`, `manual_review` for `feature-kickoff`; `success`, `manual_flag` for
-  `standard-task`). Report it to the user in plain language (what `outcome` means for this
-  specific graph) and stop.
-- **`halted: true`** — a node exhausted its `retry` budget (`halt_reason: "retries_exhausted"`), a
-  sequential map had items stuck on unresolved `dependencies` (`halt_reason:
-  "unmet_dependencies"` — a cycle; a permanently-blocked item, e.g. one whose dependency ended at
-  a non-success terminal, does **not** halt the whole map on its own), or a gate halted for a
-  human (`manual_requested`, `reject_attempts_exhausted`, or `unrecognized_result`). An
-  unrecognized `Result:` line on a gate routes to manual **immediately** — there is no self-retry
-  hop. Report the reason and, if useful, `agentgraph status --run {run_path}` to see the full
-  state snapshot (including which node halted). Do **not** auto-redrive. Ask the user to fix the
-  underlying cause (a broken environment, a genuinely-needed design decision, etc.), then call
-  `agentgraph redrive --run {run_path}` — this re-attempts only the failing node fresh, using the
-  checkpoint history to replay from exactly the point before it ran, never re-running anything
-  upstream. A gate-manual halt also zeros nested `attempt_count` fields on redrive.
-- **`interrupted: true`** — the graph paused at an explicit `interrupt()` call the graph's author
-  deliberately placed (rare in `feature-kickoff`/`standard-task` today; real in
-  `agentgraph_engine/examples/hello_graph/`, which is what proves the mechanism —
-  `tests/test_checkpoint_resume.py`). `interrupt_value` carries whatever payload the node passed.
-  Decide (or ask the user for) the resume value the paused node needs, then call `agentgraph
-  resume --run {run_path} --resume-value {value}`. Nodes already completed before the pause are
-  **not** re-executed.
+- **`outcome` set, `halted: false`, no `interrupted`** — the run reached a real terminal (`success`
+  for the production templates). Report it to the user in plain language and stop. Dead-end
+  outcomes (`blocked`, `manual_review`, `manual_flag`) are gone from the templates; those cases
+  pause instead.
+- **`interrupted: true`** — the graph paused at `interrupt()`. Production templates do this for
+  reject-budget exhaustion, `Result: manual` / unrecognized, Worker CLI death, and nested-task
+  failure. `interrupt_value` carries `reason`, `redrive_node`, and `reset_attempts`. Report the
+  reason; do **not** auto-redrive. Ask the user to fix the cause, then `agentgraph redrive --run
+  {run_path} [--message "..."]` (`Command(resume=...)` → pause node `Command(goto=redrive_node)`).
+  Every pause resets writer+gate `attempt_count`. Gate `Result: manual` / unrecognized redrives
+  **that gate** (pass `--message` to instruct the reviewer). Reject-budget exhaustion still
+  redrives the code-writer. `retries_exhausted` redrives the failed node and also resets.
+  hello_graph's checkpoint gate is the exception: it expects `agentgraph resume --run {run_path}
+  --resume-value {value}`.
+- **`halted: true` without `interrupted`** — hello_graph's technical sink (it still ENDs). Report
+  the reason; `agentgraph redrive` uses time-travel for that leftover path.
 
-## Halting
+## Halting and pausing
 
 A failing/erroring Worker CLI dispatch is an ordinary technical failure, subject to the node's
-own `retry` count, then `halt_reason: "retries_exhausted"`. Halt reasons:
+own `retry` count, then `halt_reason: "retries_exhausted"` and a pause (production) or END
+(hello_graph). Reasons:
 
 - `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit, or the
-  Worker didn't write its required output file) more times than its `retry` count allows. See
-  `ENGINE-CLI.md`'s "Permission mode by model tier" section for how the dispatch's
-  `--permission-mode` is chosen.
-- `unmet_dependencies` — a sequential map (`feature-kickoff`'s `run_tasks`) had remaining items
-  stuck on unresolved `dependencies` with nothing ready to progress (a cycle).
-- `manual_requested` — a gate's `Result:` line started with `manual`.
-- `reject_attempts_exhausted` — a gate's reject-loop budget on the retry target's `attempt_count`
-  was already at the cap.
+  Worker didn't write its required output file) more times than its `retry` count allows. Redrive
+  the same node; reset `attempt_count`.
+- `unmet_dependencies` — a sequential map had remaining items stuck on unresolved `dependencies`
+  with nothing ready to progress (a cycle).
+- `manual_requested` — a gate's `Result:` line started with `manual` (or implement `stopped`).
+  Redrive the **gate** (reviewer); implement `stopped` redrives implement. Reset attempts.
+  Optional `--message` is injected into that node's Worker prompt.
+- `reject_attempts_exhausted` — a gate's reject-loop budget was already at the cap. Redrive the
+  code-writer; reset attempts.
 - `unrecognized_result` — a gate's `Result:` line matched none of accepted / rejected / manual.
-  Routes to manual immediately; no self-retry hop.
+  Pauses immediately; no self-retry hop. Redrive the **gate**; reset attempts.
 
-Re-invoking `agentgraph start` on a graph with a halted run does **not** resume it — start always
-creates a fresh run. Use `redrive` explicitly.
+Re-invoking `agentgraph start` on a graph with a paused/halted run does **not** resume it — start
+always creates a fresh run. Use `redrive` explicitly.
 
 ## Map items and cross-item dependencies
 
-A map/fan-out node (e.g. `05_run_tasks` inside `feature-kickoff`) dispatches sequentially — no
-concurrent dispatch — and honors each item's own `dependencies` (other item ids): an item doesn't
-start until every listed dependency reached a success terminal; a permanently-blocked item (a
-missing dependency id, or one that itself ended at a non-success terminal like `standard-task`'s
-`manual_flag`) is left `blocked` rather than halting the whole map, so a later review node can
-still see and report the gap. Each item's own artifacts land under
-`{run_dir}/{map_node_name}/item-{n}/`, using the same `{node_name}/attempt-{n}/output.md`
-convention as every other node — inspect them directly if you need to see what a specific item's
-nested run actually did.
+A map/fan-out (feature-kickoff's `pick_next_task` / `run_one_task`) dispatches sequentially — no
+concurrent dispatch — and honors each item's own `dependencies`. An item doesn't start until every
+listed dependency reached a success terminal. A missing dependency id is left `blocked` rather
+than pausing the whole map. A **paused** nested standard-task (reject budget, `Result: stopped`,
+Worker death) interrupts immediately so later items do not keep running. Nested runs share the
+parent checkpointer on a per-item `thread_id`. On-disk idempotency only skips items that already
+wrote a `04_success` receipt. Each item's artifacts land under
+`{run_dir}/05_run_tasks/item-{n}/`.

@@ -26,3 +26,5 @@ class FeatureKickoffState(BaseGraphState, total=False):
     load_tasks_node: LoadTasksNodeState
     final_review_node: FinalReviewNodeState
     map_task_states: list[StandardTaskState]
+    current_item: Optional[dict]
+    current_item_index: Optional[int]

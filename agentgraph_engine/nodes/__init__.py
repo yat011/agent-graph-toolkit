@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from agentgraph_engine.nodes.common import halted
+from agentgraph_engine.nodes.common import halted, pause
 
-__all__ = ["halted"]
+__all__ = ["halted", "pause"]

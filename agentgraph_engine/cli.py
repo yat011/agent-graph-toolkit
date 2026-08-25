@@ -30,8 +30,17 @@ from agentgraph_engine.constants import (
     WORKER_CLI_GROK,
     WORKER_CLI_KEY,
 )
+from langgraph.types import Command
+
 from agentgraph_engine.dispatch import RolePromptError, preflight_role_prompts
 from agentgraph_engine.graph_loader import GraphLoadError, get_build_graph, load_graph_module, resolve_graph_path
+from agentgraph_engine.constants import REDRIVE_MESSAGE_KEY
+from agentgraph_engine.pause import (
+    INTERRUPT_REDRIVE_NODE_KEY,
+    interrupt_payload_from_snapshot,
+    reset_nested_attempt_records,
+    resume_value_for_redrive,
+)
 
 from agentgraph_engine.runs import new_run_id, open_checkpointer, run_dir_for, thread_config
 from agentgraph_engine.worker_cli import WorkerCliError, resolve_worker_cli
@@ -145,38 +154,19 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def _reset_nested_attempt_records(values: dict) -> dict:
-    """Zero every nested node record's attempt_count.
-
-    `route` / `result_line` are left intact: `update_state` reapplies the last node's
-    conditional edges, so clearing a gate's `route` would divert the redrive away from
-    `halted_at_node`. The redriven node overwrites its own record when it runs.
-    """
-    updates: dict = {}
-    for key, value in values.items():
-        if not isinstance(value, dict) or ATTEMPT_COUNT_KEY not in value:
-            continue
-        reset = dict(value)
-        reset[ATTEMPT_COUNT_KEY] = 0
-        updates[key] = reset
-    return updates
+    """Zero every nested node record's attempt_count. Delegates to pause.reset_nested_attempt_records."""
+    return reset_nested_attempt_records(values)
 
 
 def cmd_redrive(args: argparse.Namespace) -> int:
-    """Reset a halted Run's failing node and re-attempt it fresh, without re-running anything
-    upstream of it.
+    """Resume a paused Run (interrupt) or re-attempt a halted hello_graph sink.
 
-    Implemented via LangGraph checkpoint-history time travel: find the most recent checkpoint
-    whose `.next` is exactly the node that halted (`halted_at_node`), then fork forward from
-    that checkpoint with the halt fields cleared. No per-graph predecessor map is required;
-    this works for any node, including ones with multiple incoming edges.
+    If the checkpoint has interrupts, `Command(resume=...)` continues the pause node
+    (or nested map wrapper), which then `Command(goto=redrive_node, update=...)`.
+    Every pause zeroes nested `attempt_count`. `--message` is stored as `redrive_message`
+    and injected into the target node's Worker prompt.
 
-    When the halt being redriven is one of `GATE_HALT_REASONS` (explicit `manual`, reject
-    budget exhausted, or an unrecognized Result: line), every nested node record that has an
-    `attempt_count` is reset to 0: a human fixing the real problem is a clean restart of
-    that loop. Classification fields on those records are left as-is because `update_state`
-    reapplies the last node's conditional edges; the redriven node overwrites its own
-    record when it runs. An ordinary technical-failure halt (`halt_reason ==
-    retries_exhausted`) is left as-is — no counters reset.
+    Time-travel fallback remains for graphs that still END on a technical halt (hello_graph).
     """
     worker_cli = _resolve_worker_cli_from_args(args)
     run_path = Path(args.run).resolve()
@@ -190,8 +180,20 @@ def cmd_redrive(args: argparse.Namespace) -> int:
         compiled = build_graph(checkpointer=checkpointer)
         config = thread_config(run_id)
         current = compiled.get_state(config)
+        payload = interrupt_payload_from_snapshot(current)
+        message = getattr(args, "message", None)
+        if payload:
+            compiled.update_state(config, {WORKER_CLI_KEY: worker_cli})
+            result = compiled.invoke(
+                Command(resume=resume_value_for_redrive(message)),
+                config={**config, "recursion_limit": args.recursion_limit},
+            )
+            node_id = payload.get(INTERRUPT_REDRIVE_NODE_KEY) or current.values.get(HALTED_AT_NODE_KEY)
+            print(json.dumps({"run_path": str(run_path), "run_id": run_id, "redriven_node": node_id, **_summarize(result)}))
+            return 0
+
         if not current.values.get(HALTED_KEY):
-            print(json.dumps({"status": "error", "error": "nothing to redrive — run is not halted"}))
+            print(json.dumps({"status": "error", "error": "nothing to redrive — run is not halted or paused"}))
             return 1
         node_id = current.values.get(HALTED_AT_NODE_KEY)
         if not node_id:
@@ -212,9 +214,9 @@ def cmd_redrive(args: argparse.Namespace) -> int:
             HALT_REASON_KEY: None,
             HALTED_AT_NODE_KEY: None,
             WORKER_CLI_KEY: worker_cli,
+            REDRIVE_MESSAGE_KEY: message,
         }
-        if current.values.get(HALT_REASON_KEY) in GATE_HALT_REASONS:
-            updates.update(_reset_nested_attempt_records(target.values))
+        updates.update(_reset_nested_attempt_records(target.values))
         compiled.update_state(target.config, updates)
         result = compiled.invoke(None, config={**config, "recursion_limit": args.recursion_limit})
         print(json.dumps({"run_path": str(run_path), "run_id": run_id, "redriven_node": node_id, **_summarize(result)}))
@@ -249,6 +251,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_redrive = sub.add_parser("redrive", help="Re-attempt a halted Run's failing node fresh.")
     p_redrive.add_argument("--run", required=True)
     p_redrive.add_argument("--recursion-limit", type=int, default=200)
+    p_redrive.add_argument(
+        "--message",
+        default=None,
+        help="Optional note injected into the redrive target node's Worker prompt (e.g. tell a reviewer a finding is non-blocking).",
+    )
     _add_cli_flag(p_redrive)
     p_redrive.set_defaults(func=cmd_redrive)
 
