@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from langchain_core.runnables import RunnableConfig
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 
 from agentgraph_engine.constants import (
     ATTEMPT_COUNT_KEY,
@@ -51,13 +51,15 @@ from agentgraph_engine.constants import (
 )
 from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry, extract_result_line
 from agentgraph_engine.pause import (
-    INTERRUPT_CHECKPOINT_NS_KEY,
-    INTERRUPT_PARENT_NODE_KEY,
+    INTERRUPT_REASON_KEY,
+    INTERRUPT_REDRIVE_NODE_KEY,
+    INTERRUPT_RESET_ATTEMPTS_KEY,
     gate_redrive_node,
     halt_fields,
     interrupt_payload_from_result,
     interrupt_payload_from_snapshot,
     redrive_note_block,
+    resume_value_for_redrive,
 )
 from agentgraph_engine.routing import classify_gate, matches_result_keyword
 from agentgraph_engine.runs import node_output_path, slugify
@@ -660,25 +662,29 @@ def make_run_one_task(task_graph):
         if prior is not None:
             result = {RUN_DIR_KEY: str(item_run_dir), ITEM_KEY: item, OUTCOME_KEY: prior}
         else:
-            extra = {
-                INTERRUPT_PARENT_NODE_KEY: RUN_ONE_TASK_NODE,
-                INTERRUPT_CHECKPOINT_NS_KEY: ns,
-            }
-            # On parent redrive the node restarts from the top. The child is still
-            # paused on its own thread — resume that, do not invoke a fresh input.
-            already = interrupt_payload_from_snapshot(task_graph.get_state(child_cfg))
-            if already:
-                resume_value = interrupt({**already, **extra})
-                result = task_graph.invoke(Command(resume=("redrive" if resume_value is None else resume_value)), config=child_cfg)
+            snapshot = task_graph.get_state(child_cfg)
+            child_open = interrupt_payload_from_snapshot(snapshot) or bool(
+                getattr(snapshot, "next", None)
+            )
+            if child_open:
+                result = task_graph.invoke(
+                    Command(resume=resume_value_for_redrive(state.get(REDRIVE_MESSAGE_KEY))),
+                    config=child_cfg,
+                )
             else:
                 result = task_graph.invoke(child_input, config=child_cfg)
             inner = interrupt_payload_from_result(result)
             if inner:
-                resume_value = interrupt({**inner, **extra})
-                result = task_graph.invoke(Command(resume=("redrive" if resume_value is None else resume_value)), config=child_cfg)
-                inner = interrupt_payload_from_result(result)
-                if inner:
-                    interrupt({**inner, **extra})
+                return Command(
+                    goto=PAUSE_NODE,
+                    update=halt_fields(
+                        reason=inner[INTERRUPT_REASON_KEY],
+                        redrive_node=inner[INTERRUPT_REDRIVE_NODE_KEY],
+                        reset_attempts=inner[INTERRUPT_RESET_ATTEMPTS_KEY],
+                        parent_node=RUN_ONE_TASK_NODE,
+                        checkpoint_ns=ns,
+                    ),
+                )
         map_states = list(state.get(MAP_TASK_STATES_KEY) or [])
         map_states.append(result)
         return Command(goto=PICK_NEXT_TASK_NODE, update={MAP_TASK_STATES_KEY: map_states})

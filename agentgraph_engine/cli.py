@@ -161,8 +161,9 @@ def _reset_nested_attempt_records(values: dict) -> dict:
 def cmd_redrive(args: argparse.Namespace) -> int:
     """Resume a paused Run (interrupt) or re-attempt a halted hello_graph sink.
 
-    If the checkpoint has interrupts, `Command(resume=...)` continues the pause node
-    (or nested map wrapper), which then `Command(goto=redrive_node, update=...)`.
+    If the checkpoint has interrupts, `Command(resume=...)` continues the pause node,
+    which then `Command(goto=...)`s. Nested payloads with `parent_node` re-enter that
+    parent node; `redrive_node` in the printed JSON is the payload label, not a parent jump.
     Every pause zeroes nested `attempt_count`. `--message` is stored as `redrive_message`
     and injected into the target node's Worker prompt.
 
@@ -183,9 +184,11 @@ def cmd_redrive(args: argparse.Namespace) -> int:
         payload = interrupt_payload_from_snapshot(current)
         message = getattr(args, "message", None)
         if payload:
-            compiled.update_state(config, {WORKER_CLI_KEY: worker_cli})
             result = compiled.invoke(
-                Command(resume=resume_value_for_redrive(message)),
+                Command(
+                    resume=resume_value_for_redrive(message),
+                    update={WORKER_CLI_KEY: worker_cli},
+                ),
                 config={**config, "recursion_limit": args.recursion_limit},
             )
             node_id = payload.get(INTERRUPT_REDRIVE_NODE_KEY) or current.values.get(HALTED_AT_NODE_KEY)

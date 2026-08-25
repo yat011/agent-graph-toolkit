@@ -28,3 +28,5 @@ class FeatureKickoffState(BaseGraphState, total=False):
     map_task_states: list[StandardTaskState]
     current_item: Optional[dict]
     current_item_index: Optional[int]
+    parent_node: Optional[str]
+    nested_checkpoint_ns: Optional[str]

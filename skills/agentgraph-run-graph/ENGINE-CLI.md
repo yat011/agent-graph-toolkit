@@ -126,7 +126,8 @@ On the Claude Worker CLI, `--permission-mode auto` lets the model's own action-c
 each tool call, but that classifier requires Sonnet-tier and above. A dispatch resolved to the
 `haiku` model instead uses `--permission-mode acceptEdits --allowedTools Write` (no classifier
 needed; `Write` is the one tool this dispatch path's contract requires). Grok uses
-`--permission-mode auto`; Cursor uses `--auto-review` (plus `--approve-mcps` and `--trust`, never
+`--permission-mode auto` and passes the work order as the value of `-p` / `--single` (Grok does
+not read that prompt from stdin). Cursor uses `--auto-review` (plus `--approve-mcps` and `--trust`, never
 `--force`). `DispatchResult.ok` comes back `False` — an ordinary technical failure, retried/halted
 like any other — if a dispatch's permission mode still blocks the write it needs.
 

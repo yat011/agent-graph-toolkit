@@ -51,7 +51,7 @@ class WorkerCli(Protocol):
 
     def resolve_model(self, graph_model: str | None) -> str: ...
 
-    def argv(self, resolved_binary: str, mapped_model: str) -> list[str]: ...
+    def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]: ...
 
     def parse_envelope(self, envelope: dict) -> dict: ...
 
@@ -224,7 +224,7 @@ class ClaudeWorkerCli:
             GRAPH_MODEL_OPUS: CLAUDE_MODEL_OPUS,
         }[row]
 
-    def argv(self, resolved_binary: str, mapped_model: str) -> list[str]:
+    def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
         if mapped_model == CLAUDE_MODEL_CHEAP:
             permission = ["--permission-mode", "acceptEdits", "--allowedTools", "Write"]
         else:
@@ -252,10 +252,13 @@ class GrokWorkerCli:
         _graph_model_row(graph_model)
         return GROK_MODEL
 
-    def argv(self, resolved_binary: str, mapped_model: str) -> list[str]:
+    def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]:
+        # Grok's `-p` is `--single <PROMPT>` and must be followed by the prompt text.
+        # A bare `-p --permission-mode ...` exits 2: "a value is required for '--single <PROMPT>'".
         return [
             resolved_binary,
             "-p",
+            prompt,
             "--permission-mode",
             "auto",
             "--output-format",
@@ -278,7 +281,7 @@ class CursorWorkerCli:
         _graph_model_row(graph_model)
         return CURSOR_MODEL
 
-    def argv(self, resolved_binary: str, mapped_model: str) -> list[str]:
+    def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
         return [
             resolved_binary,
             "-p",

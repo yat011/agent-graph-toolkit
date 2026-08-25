@@ -2,7 +2,8 @@
 
 When a gate's reject budget is exhausted, a Worker dispatch dies, or a `Result:` line is
 unrecognized/`manual`, the graph PAUSES. `agentgraph redrive` then `Command(resume=...)`s.
-The pause node (or the nested-task wrapper) issues `Command(goto=redrive_node, update=...)`.
+The pause node (or the nested-task wrapper) issues `Command(goto=...)`.
+A nested payload with `parent_node` re-enters that parent node; otherwise `redrive_node`.
 
 Every pause zeroes `attempt_count` on nested node records so a redrive cannot immediately
 re-hit the same cap (deadlock). Reject-budget exhaustion redrives the **code-writer**
@@ -34,17 +35,32 @@ INTERRUPT_REDRIVE_NODE_KEY = "redrive_node"
 INTERRUPT_RESET_ATTEMPTS_KEY = "reset_attempts"
 INTERRUPT_PARENT_NODE_KEY = "parent_node"
 INTERRUPT_CHECKPOINT_NS_KEY = "checkpoint_ns"
+# LangGraph reserves the channel name `checkpoint_ns`. Persist the map item id
+# on state under this key; copy it onto the interrupt payload as checkpoint_ns.
+NESTED_CHECKPOINT_NS_STATE_KEY = "nested_checkpoint_ns"
 
 
-def halt_fields(*, reason: str, redrive_node: str, reset_attempts: bool = True) -> dict:
+def halt_fields(
+    *,
+    reason: str,
+    redrive_node: str,
+    reset_attempts: bool = True,
+    parent_node: str | None = None,
+    checkpoint_ns: str | None = None,
+) -> dict:
     """Graph-level fields that tell `pause` / `redrive` where to jump and whether to zero counters."""
-    return {
+    fields = {
         HALTED_KEY: True,
         HALT_REASON_KEY: reason,
         HALTED_AT_NODE_KEY: redrive_node,
         REDRIVE_NODE_KEY: redrive_node,
         RESET_ATTEMPTS_KEY: reset_attempts,
     }
+    if parent_node:
+        fields[INTERRUPT_PARENT_NODE_KEY] = parent_node
+    if checkpoint_ns:
+        fields[NESTED_CHECKPOINT_NS_STATE_KEY] = checkpoint_ns
+    return fields
 
 
 def gate_redrive_node(*, halt_reason: str, writer: str, gate: str) -> str:
@@ -141,9 +157,28 @@ def pause_payload(state: dict, *, extra: Optional[dict] = None) -> dict:
         INTERRUPT_REDRIVE_NODE_KEY: redrive,
         INTERRUPT_RESET_ATTEMPTS_KEY: reset,
     }
+    parent_node = state.get(INTERRUPT_PARENT_NODE_KEY)
+    checkpoint_ns = state.get(NESTED_CHECKPOINT_NS_STATE_KEY)
+    if parent_node:
+        payload[INTERRUPT_PARENT_NODE_KEY] = parent_node
+    if checkpoint_ns:
+        payload[INTERRUPT_CHECKPOINT_NS_KEY] = checkpoint_ns
     if extra:
         payload.update(extra)
     return payload
+
+
+def goto_after_pause(payload: dict) -> str:
+    """`Command(goto=redrive_node)` only when that node lives on this graph.
+
+    Nested map pauses stash `parent_node` (run_one_task_node) plus a child `redrive_node`
+    that exists only on the child graph. The parent must re-enter `parent_node`; the child
+    pause still jumps to `redrive_node` because its payload has no `parent_node`.
+    """
+    parent_node = payload.get(INTERRUPT_PARENT_NODE_KEY)
+    if parent_node:
+        return parent_node
+    return payload[INTERRUPT_REDRIVE_NODE_KEY]
 
 
 def pause(state: dict) -> Command:
@@ -155,7 +190,6 @@ def pause(state: dict) -> Command:
     """
     payload = pause_payload(state)
     resume_value = interrupt(payload)
-    redrive = payload[INTERRUPT_REDRIVE_NODE_KEY]
     updates = {
         HALTED_KEY: False,
         HALT_REASON_KEY: None,
@@ -164,10 +198,12 @@ def pause(state: dict) -> Command:
         RESET_ATTEMPTS_KEY: False,
         OUTCOME_KEY: None,
         REDRIVE_MESSAGE_KEY: message_from_resume(resume_value),
+        INTERRUPT_PARENT_NODE_KEY: None,
+        NESTED_CHECKPOINT_NS_STATE_KEY: None,
     }
     if payload[INTERRUPT_RESET_ATTEMPTS_KEY]:
         updates.update(reset_nested_attempt_records(state))
-    return Command(goto=redrive, update=updates)
+    return Command(goto=goto_after_pause(payload), update=updates)
 
 
 def route_to_pause_if_halted(state: dict, otherwise: str) -> str:

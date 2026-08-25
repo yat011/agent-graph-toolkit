@@ -13,6 +13,8 @@ not by a `cli=` argument on this function or on any node.
 
 A failing/erroring CLI call is an ordinary technical failure, surfaced via
 `DispatchResult.ok is False`, subject to each Node's own `retry` count via `dispatch_with_retry`.
+Claude and Cursor receive the combined prompt on stdin; Grok's `-p` requires that same
+prompt as the option value (stdin is still populated for the executor seam).
 """
 
 from __future__ import annotations
@@ -241,7 +243,7 @@ def dispatch_worker(
     # shell's PATH lookup would. Falls back to the raw name if not found, so a genuinely missing
     # CLI still surfaces as an ordinary technical failure rather than a different kind of crash.
     resolved_binary = shutil.which(vendor_cli.binary) or vendor_cli.binary
-    argv = vendor_cli.argv(resolved_binary, mapped_model)
+    argv = vendor_cli.argv(resolved_binary, mapped_model, combined_prompt)
 
     try:
         proc = executor(argv, combined_prompt, timeout)

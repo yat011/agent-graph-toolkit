@@ -131,7 +131,7 @@ def build_graph(checkpointer=None):
     graph.add_node(
         RUN_ONE_TASK_NODE,
         make_run_one_task(task_graph),
-        destinations=(PICK_NEXT_TASK_NODE,),
+        destinations=(PICK_NEXT_TASK_NODE, PAUSE_NODE),
     )
     graph.add_node(FINAL_REVIEW_NODE, final_review)
     graph.add_node(SUCCESS_NODE, success)
@@ -144,6 +144,7 @@ def build_graph(checkpointer=None):
             TECH_PLAN_REVIEWER_NODE,
             LOAD_TASKS_NODE,
             PICK_NEXT_TASK_NODE,
+            RUN_ONE_TASK_NODE,
             FINAL_REVIEW_NODE,
         ),
     )

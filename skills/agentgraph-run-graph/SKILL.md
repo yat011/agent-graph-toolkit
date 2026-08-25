@@ -12,7 +12,7 @@ are owned by the compiled LangGraph `StateGraph` itself, driven by the `agentgra
 (`agentgraph_engine/cli.py`; see `ENGINE-CLI.md` in this same directory for exact command syntax
 — this file does not restate it).
 
-Never monitor progress or read run files. Start `agentgraph` in the background and wait only for the subprocess/terminal completion callback; when that process has exited, report "The graph execution is done".
+Never monitor progress or read run files. Start `agentgraph` in the background and wait only for the subprocess/terminal completion callback; when that process has exited, report "The graph execution is done" and show the last 10 lines of that terminal's output (the process body, not the session metadata header).
 
 Dispatch and branch judgment live in the graph's own Python code. A node's router function does
 plain string-matching against a `Result:` line — never an LLM or human judgment call. You start
