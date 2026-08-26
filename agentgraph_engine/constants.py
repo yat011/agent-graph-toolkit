@@ -58,11 +58,14 @@ RETURNCODE_KEY = "returncode"
 ROLE_GENERAL_PURPOSE = "general-purpose"
 MODEL_CHEAP = "cheap"
 
-# Mechanism vocabulary — Worker CLI identities (vendor headless CLI for a process).
+# Mechanism vocabulary — Worker CLI identities (vendor CLI for a process).
 WORKER_CLI_CLAUDE = "claude"
 WORKER_CLI_GROK = "grok"
 WORKER_CLI_CURSOR = "cursor"
-WORKER_CLI_IDENTITIES = frozenset({WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR})
+WORKER_CLI_GROK_ORCA = "grok-orca"
+WORKER_CLI_IDENTITIES = frozenset(
+    {WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR, WORKER_CLI_GROK_ORCA}
+)
 WORKER_CLI_CURSOR_BINARY = "cursor-agent"
 
 # On-disk attempt-folder names for a nested standard-task run.

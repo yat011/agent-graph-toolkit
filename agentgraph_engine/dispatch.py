@@ -1,20 +1,23 @@
 """Shared dispatch/executor module.
 
 Dispatches one Worker per call via the process Worker CLI (Claude Code `claude`, Grok Build
-`grok`, or Cursor Agent `cursor-agent` — see `worker_cli.py`). Every dispatch is stateless:
-this module never passes `--resume`/`--continue`, and never tracks/reuses a `session_id`
-across calls — a Node's own file-based context (paths passed in its prompt) plus the Graph's
-checkpointer state are the only continuity mechanism across attempts.
+`grok`, Cursor Agent `cursor-agent`, or `grok-orca` — Grok TUI hosted in an Orca pane; see
+`worker_cli.py`). Every dispatch is stateless: this module never passes `--resume`/`--continue`,
+and never tracks/reuses a `session_id` across calls — a Node's own file-based context (paths
+passed in its prompt) plus the Graph's checkpointer state are the only continuity mechanism
+across attempts.
 
 No provider API key is used or read anywhere in this module. The Executor (the `executor`
 callable) is the pluggable in-process seam: swapping the real subprocess for a test fake
-never requires changing a Node/Graph. The vendor binary is selected by `current_worker_cli()`,
-not by a `cli=` argument on this function or on any node.
+never requires changing a Node/Graph. The Worker CLI is selected by `current_worker_cli()`,
+not by a `cli=` argument on this function or on any node. `dispatch_worker` always calls
+`WorkerCli.run`; it never invokes `executor` on vendor argv itself.
 
 A failing/erroring CLI call is an ordinary technical failure, surfaced via
 `DispatchResult.ok is False`, subject to each Node's own `retry` count via `dispatch_with_retry`.
 Claude and Cursor receive the combined prompt on stdin; Grok's `-p` requires that same
-prompt as the option value (stdin is still populated for the executor seam).
+prompt as the option value (stdin is still populated for the executor seam). `grok-orca`
+sends the combined prompt via `orca terminal send --text`, not grok argv.
 """
 
 from __future__ import annotations
@@ -167,7 +170,7 @@ def preflight_role_prompts(graph_py: Path) -> None:
 
 def extract_result_line(text: Optional[str]) -> Optional[str]:
     """Extract the last `Result: <phrase>` line's phrase (prefix stripped), or None."""
-    if not text:
+    if not isinstance(text, str) or not text:
         return None
     matches = RESULT_LINE_RE.findall(text)
     return matches[-1].strip() if matches else None
@@ -243,10 +246,16 @@ def dispatch_worker(
     # shell's PATH lookup would. Falls back to the raw name if not found, so a genuinely missing
     # CLI still surfaces as an ordinary technical failure rather than a different kind of crash.
     resolved_binary = shutil.which(vendor_cli.binary) or vendor_cli.binary
-    argv = vendor_cli.argv(resolved_binary, mapped_model, combined_prompt)
 
     try:
-        proc = executor(argv, combined_prompt, timeout)
+        proc = vendor_cli.run(
+            resolved_binary,
+            mapped_model,
+            combined_prompt,
+            timeout,
+            executor,
+            output_path,
+        )
     except Exception as exc:  # subprocess couldn't start, timed out, etc. — technical failure
         usage = build_usage(identity=identity, mapped_model=mapped_model, envelope={})
         _write_usage_json(output_path, usage)
@@ -270,8 +279,11 @@ def dispatch_worker(
     if stdout.strip():
         try:
             envelope = json.loads(stdout)
-            result_text = envelope.get("result")
+            raw_result = envelope.get("result")
+            result_text = raw_result if isinstance(raw_result, str) else None
             session_id = envelope.get("session_id")
+            if not isinstance(session_id, str):
+                session_id = None
         except json.JSONDecodeError:
             result_text = stdout
 

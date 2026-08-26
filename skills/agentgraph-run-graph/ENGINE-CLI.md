@@ -13,9 +13,9 @@ loads (CONTEXT.md's "Executor").
 
 ## Worker CLI
 
-`start`, `resume`, and `redrive` each resolve the vendor headless CLI **once per process**:
+`start`, `resume`, and `redrive` each resolve the Worker CLI **once per process**:
 
-1. `--cli claude|grok|cursor` on that command, if present
+1. `--cli claude|grok|cursor|grok-orca` on that command, if present
 2. else `worker_cli` in `~/.agents/agentgraph.json`, if present
 3. else `claude`
 
@@ -32,7 +32,7 @@ The settings file is optional (read if present; `start` does not create it):
 
 ## Commands
 
-### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N] [--cli claude|grok|cursor]`
+### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
 
 Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-task`, a project graph,
 or a user graph), loaded dynamically via `agentgraph_engine.graph_loader` (never copied into a
@@ -52,7 +52,7 @@ a graph that doesn't derive them itself).
 Output: `{"run_path": ..., "run_id": ..., "halted": bool, "halt_reason": str|null, "outcome":
 str|null, "interrupted"?: bool, "interrupt_value"?: [...]}`.
 
-### `agentgraph resume --run <run_path> [--resume-value <value>] [--recursion-limit N] [--cli claude|grok|cursor]`
+### `agentgraph resume --run <run_path> [--resume-value <value>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
 
 Resumes a Run paused at a LangGraph `interrupt()` call (not a halt — see below), using the same
 `run_path`'s `checkpoints.sqlite`. `--resume-value` becomes the interrupted node's `interrupt()`
@@ -66,7 +66,7 @@ Prints the Run's current checkpointed state: `{"run_path": ..., "next": [...], "
 `next` is the node(s) LangGraph would run on the next `invoke`/`resume` call (empty if the Run
 reached `END`).
 
-### `agentgraph redrive --run <run_path> [--message <text>] [--recursion-limit N] [--cli claude|grok|cursor]`
+### `agentgraph redrive --run <run_path> [--message <text>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
 
 Continues a **paused** Run (`interrupt()` at `pause_node` or inside a nested-task wrapper) or
 re-attempts a **halted** hello_graph sink.

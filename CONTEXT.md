@@ -22,7 +22,8 @@ mechanism across attempts.
 _Avoid_: Subagent (ambiguous with the Coordinating agent's own subagent-dispatch), executor.
 
 **Worker CLI**:
-The vendor headless CLI a Run uses for every Worker dispatch: `claude`, `grok`, or `cursor`.
+The Worker CLI a Run uses for every Worker dispatch: `claude`, `grok`, `cursor`, or `grok-orca`.
+`grok-orca` is a Worker CLI identity — inner TUI is still Grok; Orca hosts the pane.
 Each engine process resolves it once as `--cli` > user setting > `claude`, then keeps that
 value in memory for every dispatch until the process exits. A later `resume`/`redrive` is a
 new process and resolves again. The checkpointed value is not an input to selection.

@@ -28,6 +28,7 @@ from agentgraph_engine.constants import (
     WORKER_CLI_CLAUDE,
     WORKER_CLI_CURSOR,
     WORKER_CLI_GROK,
+    WORKER_CLI_GROK_ORCA,
     WORKER_CLI_KEY,
 )
 from langgraph.types import Command
@@ -45,7 +46,7 @@ from agentgraph_engine.pause import (
 from agentgraph_engine.runs import new_run_id, open_checkpointer, run_dir_for, thread_config
 from agentgraph_engine.worker_cli import WorkerCliError, resolve_worker_cli
 
-WORKER_CLI_CHOICES = (WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR)
+WORKER_CLI_CHOICES = (WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR, WORKER_CLI_GROK_ORCA)
 
 DEFAULT_AGENT_WORKS_ROOT = Path("agent_works")
 
@@ -271,7 +272,7 @@ def _add_cli_flag(parser: argparse.ArgumentParser) -> None:
         choices=WORKER_CLI_CHOICES,
         default=None,
         help=(
-            "Worker CLI for this process (claude, grok, or cursor). "
+            "Worker CLI for this process (claude, grok, cursor, or grok-orca). "
             "Overrides ~/.agents/agentgraph.json. Default: claude."
         ),
     )

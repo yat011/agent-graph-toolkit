@@ -390,6 +390,7 @@ def test_dispatch_argv_matches_spec_per_cli_and_model(tmp_path, cli, model, bina
         model=model,
         executor=make_executor(write_output=True, call_log=calls),
     )
+    assert len(calls) == 1
     argv = calls[0]
     assert Path(argv[0]).stem.lower() == binary_stem
     if cli == "grok":
@@ -561,4 +562,176 @@ def test_grok_envelope_accepts_cache_read_tokens_field_names(tmp_path):
         "cache_read_tokens": 5,
         "cache_write_tokens": 6,
     }
+
+
+ORCA_CREATE_HANDLE = "term_test_handle"
+
+
+def _stub_orca_and_grok_which(monkeypatch, tmp_path, *, orca: bool = True, grok: bool = True):
+    """PATH stand-in so grok-orca tests do not depend on a live orca/grok install."""
+
+    def fake_which(cmd: str) -> str | None:
+        stem = Path(cmd).stem.lower()
+        if stem == "orca" and orca:
+            return str(tmp_path / "fake-bin" / "orca")
+        if stem == "grok" and grok:
+            return str(tmp_path / "fake-bin" / "grok")
+        return None
+
+    monkeypatch.setattr("shutil.which", fake_which)
+
+
+def _orca_action(argv: list) -> str:
+    return argv[argv.index("terminal") + 1]
+
+
+def make_orca_cli_executor(call_log: list, *, fail_second_wait: bool = False):
+    """Fake `orca` CLI: argv in, JSON stdout out. Writes output.md on send from --text.
+
+    Create stdout is the known-good handle blob `{"handle": "term_test_handle"}`.
+    """
+    waits = {"n": 0}
+
+    def executor(argv, input_text, timeout):
+        call_log.append(list(argv))
+        action = _orca_action(argv)
+        if action == "create":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout=json.dumps(
+                    {
+                        "ok": True,
+                        "id": "req-uuid",
+                        "result": {"handle": ORCA_CREATE_HANDLE},
+                    }
+                ),
+                stderr="",
+            )
+        if action == "wait":
+            waits["n"] += 1
+            orca_wait_json = json.dumps({"ok": True, "id": "req-uuid", "result": {}})
+            if fail_second_wait and waits["n"] == 2:
+                return subprocess.CompletedProcess(
+                    argv, 1, stdout=orca_wait_json, stderr="tui-idle timeout"
+                )
+            return subprocess.CompletedProcess(argv, 0, stdout=orca_wait_json, stderr="")
+        if action == "send":
+            text = argv[argv.index("--text") + 1]
+            path_line = next(
+                line for line in text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+            )
+            out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX) :].strip())
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("Result: done\n", encoding="utf-8")
+            return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
+        if action == "close":
+            return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
+        raise AssertionError(f"unexpected orca argv: {argv}")
+
+    return executor
+
+
+def test_grok_orca_dispatch_drives_orca_create_wait_send_wait_close(tmp_path, monkeypatch):
+    resolve_worker_cli(cli_flag="grok-orca")
+    _stub_orca_and_grok_which(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    output_path = tmp_path / "dispatch_worker" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=make_orca_cli_executor(calls),
+    )
+    assert result.ok is True
+    assert [_orca_action(argv) for argv in calls] == [
+        "create",
+        "wait",
+        "send",
+        "wait",
+        "close",
+    ]
+    for argv in calls:
+        assert Path(argv[0]).stem.lower() == "orca"
+
+    create = calls[0]
+    assert create[create.index("--worktree") + 1] == "active"
+    assert create[create.index("--title") + 1] == f"{tmp_path.name}:dispatch_worker"
+    assert "--focus" not in create
+    command = create[create.index("--command") + 1]
+    assert "--permission-mode" in command
+    assert "auto" in command
+    assert "--model" in command
+    assert "grok-4.6" in command
+    assert "--effort" in command
+    assert "high" in command
+    assert "-p" not in command.split()
+    assert "--output-format" not in command
+    assert "--always-approve" not in command
+
+    send = calls[2]
+    assert "--enter" in send
+    assert send[send.index("--terminal") + 1] == ORCA_CREATE_HANDLE
+    prompt = send[send.index("--text") + 1]
+    assert "caveman skill full" in prompt
+    assert OUTPUT_PATH_LINE_PREFIX in prompt
+
+    for wait in (calls[1], calls[3]):
+        assert wait[wait.index("--for") + 1] == "tui-idle"
+        assert wait[wait.index("--terminal") + 1] == ORCA_CREATE_HANDLE
+
+    expected_usage = {
+        "worker_cli": "grok-orca",
+        "model": "grok-4.6",
+        "cost_usd": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cache_read_tokens": None,
+        "cache_write_tokens": None,
+    }
+    usage_path = output_path.parent / "usage.json"
+    assert json.loads(usage_path.read_text(encoding="utf-8")) == expected_usage
+    assert result.usage == expected_usage
+
+
+def test_grok_orca_closes_terminal_when_second_wait_fails(tmp_path, monkeypatch):
+    resolve_worker_cli(cli_flag="grok-orca")
+    _stub_orca_and_grok_which(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    output_path = tmp_path / "dispatch_worker" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=make_orca_cli_executor(calls, fail_second_wait=True),
+    )
+    assert result.ok is False
+    assert [_orca_action(argv) for argv in calls] == [
+        "create",
+        "wait",
+        "send",
+        "wait",
+        "close",
+    ]
+    assert calls[-1][calls[-1].index("terminal") + 1] == "close"
+
+
+def test_grok_orca_missing_orca_fails_before_create(tmp_path, monkeypatch):
+    resolve_worker_cli(cli_flag="grok-orca")
+    _stub_orca_and_grok_which(monkeypatch, tmp_path, orca=False, grok=True)
+    calls: list = []
+
+    def executor(argv, input_text, timeout):
+        calls.append(argv)
+        raise AssertionError("executor must not run when orca is missing")
+
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=tmp_path / "dispatch_worker" / "attempt-1" / "output.md",
+        executor=executor,
+    )
+    assert result.ok is False
+    assert calls == []
+    assert "orca" in result.stderr.lower()
 

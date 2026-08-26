@@ -1,15 +1,22 @@
 """Worker CLI identities, once-per-process selection, and vendor argv/envelope implementations.
 
-A Run dispatches every Worker through one vendor headless CLI — `claude`, `grok`, or
-`cursor` (binary `cursor-agent`). Selection happens once per engine process
-(`--cli` > `~/.agents/agentgraph.json` > `claude`) and lives in a ContextVar for the
-life of that process. `dispatch_worker` reads `current_worker_cli()`; it does not
-re-run the cascade, and the checkpointed value is not an input to the next process.
+A Run dispatches every Worker through one Worker CLI — `claude`, `grok`, `cursor`
+(binary `cursor-agent`), or `grok-orca` (Grok TUI hosted in an Orca pane). Selection
+happens once per engine process (`--cli` > `~/.agents/agentgraph.json` > `claude`) and
+lives in a ContextVar for the life of that process. `dispatch_worker` reads
+`current_worker_cli()`; it does not re-run the cascade, and the checkpointed value is
+not an input to the next process.
 """
 
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import shutil
+import subprocess
+import time
+from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Protocol
@@ -20,6 +27,7 @@ from agentgraph_engine.constants import (
     WORKER_CLI_CURSOR,
     WORKER_CLI_CURSOR_BINARY,
     WORKER_CLI_GROK,
+    WORKER_CLI_GROK_ORCA,
     WORKER_CLI_IDENTITIES,
     WORKER_CLI_KEY,
 )
@@ -45,6 +53,11 @@ class UnknownGraphModelError(ValueError):
     """Graph `model` is not cheap/haiku/sonnet/opus/unset."""
 
 
+WorkerExecutor = Callable[[list[str], str, int | None], subprocess.CompletedProcess]
+
+ORCA_BINARY = "orca"
+
+
 class WorkerCli(Protocol):
     identity: str
     binary: str
@@ -54,6 +67,16 @@ class WorkerCli(Protocol):
     def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]: ...
 
     def parse_envelope(self, envelope: dict) -> dict: ...
+
+    def run(
+        self,
+        resolved_binary: str,
+        mapped_model: str,
+        prompt: str,
+        timeout: int | None,
+        executor: WorkerExecutor,
+        output_path: Path,
+    ) -> subprocess.CompletedProcess: ...
 
 
 def default_settings_path() -> Path:
@@ -243,6 +266,17 @@ class ClaudeWorkerCli:
     def parse_envelope(self, envelope: dict) -> dict:
         return _claude_shaped_usage(envelope)
 
+    def run(
+        self,
+        resolved_binary: str,
+        mapped_model: str,
+        prompt: str,
+        timeout: int | None,
+        executor: WorkerExecutor,
+        output_path: Path,
+    ) -> subprocess.CompletedProcess:
+        return executor(self.argv(resolved_binary, mapped_model, prompt), prompt, timeout)
+
 
 class GrokWorkerCli:
     identity = WORKER_CLI_GROK
@@ -272,6 +306,17 @@ class GrokWorkerCli:
     def parse_envelope(self, envelope: dict) -> dict:
         return _claude_shaped_usage(envelope)
 
+    def run(
+        self,
+        resolved_binary: str,
+        mapped_model: str,
+        prompt: str,
+        timeout: int | None,
+        executor: WorkerExecutor,
+        output_path: Path,
+    ) -> subprocess.CompletedProcess:
+        return executor(self.argv(resolved_binary, mapped_model, prompt), prompt, timeout)
+
 
 class CursorWorkerCli:
     identity = WORKER_CLI_CURSOR
@@ -297,11 +342,229 @@ class CursorWorkerCli:
     def parse_envelope(self, envelope: dict) -> dict:
         return _null_usage()
 
+    def run(
+        self,
+        resolved_binary: str,
+        mapped_model: str,
+        prompt: str,
+        timeout: int | None,
+        executor: WorkerExecutor,
+        output_path: Path,
+    ) -> subprocess.CompletedProcess:
+        return executor(self.argv(resolved_binary, mapped_model, prompt), prompt, timeout)
+
+
+def _join_command(argv: list[str]) -> str:
+    if os.name == "nt":
+        return subprocess.list2cmdline(argv)
+    return shlex.join(argv)
+
+
+def _pane_title(output_path: Path) -> str:
+    """`{run_dir}/{node_id}/attempt-N/output.md` → `{run}:{node}`."""
+    return f"{output_path.parent.parent.parent.name}:{output_path.parent.parent.name}"
+
+
+def _remaining_timeout(deadline: float | None) -> int | None:
+    if deadline is None:
+        return None
+    return max(0, int(deadline - time.monotonic()))
+
+
+def _timeout_ms_argv(deadline: float | None) -> list[str]:
+    if deadline is None:
+        return []
+    remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+    return ["--timeout-ms", str(remaining_ms)]
+
+
+def _parse_orca_terminal_handle(stdout: str) -> str:
+    """Parse `orca terminal create --json` stdout for a terminal handle.
+
+    Known-good test fake: `{"handle": "term_test_handle"}`.
+    Also accepts a live Orca envelope (`result.handle`), nested `terminal.handle`,
+    and inner `id` (not the envelope request id).
+    """
+    try:
+        payload = json.loads(stdout or "")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"orca terminal create did not return JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(
+            f"orca terminal create JSON must be an object, got {type(payload).__name__}"
+        )
+    handle = _find_terminal_handle(payload)
+    if handle is None:
+        raise ValueError(f"orca terminal create JSON missing handle: {payload!r}")
+    return handle
+
+
+def _find_terminal_handle(payload: dict) -> str | None:
+    bodies = [payload]
+    result = payload.get("result")
+    if isinstance(result, dict):
+        bodies.append(result)
+    for body in bodies:
+        handle = body.get("handle")
+        if isinstance(handle, str) and handle:
+            return handle
+        terminal = body.get("terminal")
+        if isinstance(terminal, dict):
+            for key in ("handle", "id"):
+                nested = terminal.get(key)
+                if isinstance(nested, str) and nested:
+                    return nested
+    inner = bodies[-1]
+    ident = inner.get("id")
+    if isinstance(ident, str) and ident:
+        return ident
+    return None
+
+
+def _orca_wait(
+    executor: WorkerExecutor,
+    orca_binary: str,
+    handle: str,
+    deadline: float | None,
+) -> subprocess.CompletedProcess:
+    argv = [
+        orca_binary,
+        "terminal",
+        "wait",
+        "--terminal",
+        handle,
+        "--for",
+        "tui-idle",
+        *_timeout_ms_argv(deadline),
+        "--json",
+    ]
+    return executor(argv, "", _remaining_timeout(deadline))
+
+
+def _dispatch_proc(proc: subprocess.CompletedProcess) -> subprocess.CompletedProcess:
+    """Drop Orca JSON stdout so dispatch does not treat `result` as Worker chat text."""
+    return subprocess.CompletedProcess(proc.args, proc.returncode, stdout="", stderr=proc.stderr or "")
+
+
+class GrokOrcaWorkerCli:
+    """Worker CLI identity: inner TUI is Grok; Orca hosts the pane."""
+
+    identity = WORKER_CLI_GROK_ORCA
+    binary = WORKER_CLI_GROK
+
+    def resolve_model(self, graph_model: str | None) -> str:
+        _graph_model_row(graph_model)
+        return GROK_MODEL
+
+    def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
+        return [
+            resolved_binary,
+            "--permission-mode",
+            "auto",
+            "--model",
+            mapped_model,
+            "--effort",
+            "high",
+        ]
+
+    def parse_envelope(self, envelope: dict) -> dict:
+        return _null_usage()
+
+    def run(
+        self,
+        resolved_binary: str,
+        mapped_model: str,
+        prompt: str,
+        timeout: int | None,
+        executor: WorkerExecutor,
+        output_path: Path,
+    ) -> subprocess.CompletedProcess:
+        orca_binary = shutil.which(ORCA_BINARY)
+        if orca_binary is None:
+            raise FileNotFoundError(
+                "orca CLI not found on PATH (required for grok-orca Worker CLI)"
+            )
+        if shutil.which(WORKER_CLI_GROK) is None:
+            raise FileNotFoundError(
+                "grok CLI not found on PATH (required for grok-orca Worker CLI)"
+            )
+
+        grok_argv = self.argv(resolved_binary, mapped_model, prompt)
+        command = _join_command(grok_argv)
+        title = _pane_title(output_path)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        handle: str | None = None
+        try:
+            created = executor(
+                [
+                    orca_binary,
+                    "terminal",
+                    "create",
+                    "--worktree",
+                    "active",
+                    "--title",
+                    title,
+                    "--command",
+                    command,
+                    "--json",
+                ],
+                "",
+                _remaining_timeout(deadline),
+            )
+            if created.returncode != 0:
+                return _dispatch_proc(created)
+            handle = _parse_orca_terminal_handle(created.stdout)
+
+            waited = _orca_wait(executor, orca_binary, handle, deadline)
+            if waited.returncode != 0:
+                return _dispatch_proc(waited)
+
+            sent = executor(
+                [
+                    orca_binary,
+                    "terminal",
+                    "send",
+                    "--terminal",
+                    handle,
+                    "--text",
+                    prompt,
+                    "--enter",
+                    "--json",
+                ],
+                "",
+                _remaining_timeout(deadline),
+            )
+            if sent.returncode != 0:
+                return _dispatch_proc(sent)
+
+            # tui-idle can fire before Grok is marked busy; give the pane a beat.
+            time.sleep(10)
+
+            return _dispatch_proc(_orca_wait(executor, orca_binary, handle, deadline))
+        finally:
+            if handle is not None:
+                try:
+                    executor(
+                        [
+                            orca_binary,
+                            "terminal",
+                            "close",
+                            "--terminal",
+                            handle,
+                            "--json",
+                        ],
+                        "",
+                        _remaining_timeout(deadline),
+                    )
+                except Exception:
+                    pass
+
 
 _IMPLEMENTATIONS: dict[str, WorkerCli] = {
     WORKER_CLI_CLAUDE: ClaudeWorkerCli(),
     WORKER_CLI_GROK: GrokWorkerCli(),
     WORKER_CLI_CURSOR: CursorWorkerCli(),
+    WORKER_CLI_GROK_ORCA: GrokOrcaWorkerCli(),
 }
 
 
