@@ -40,7 +40,7 @@ CLAUDE_MODEL_CHEAP = "haiku"
 CLAUDE_MODEL_SONNET = "sonnet"
 CLAUDE_MODEL_OPUS = "opus"
 GROK_MODEL = "grok-4.6"
-CURSOR_MODEL = "cursor-grok-4.6-high"
+CURSOR_MODEL = "cursor-grok-4.6-medium"
 
 _resolved_worker_cli: ContextVar[str | None] = ContextVar("agentgraph_worker_cli", default=None)
 
@@ -300,7 +300,7 @@ class GrokWorkerCli:
             "--model",
             mapped_model,
             "--effort",
-            "high",
+            "medium",
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:
@@ -464,7 +464,7 @@ class GrokOrcaWorkerCli:
             "--model",
             mapped_model,
             "--effort",
-            "high",
+            "medium",
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:
@@ -540,7 +540,13 @@ class GrokOrcaWorkerCli:
             # tui-idle can fire before Grok is marked busy; give the pane a beat.
             time.sleep(10)
 
-            return _dispatch_proc(_orca_wait(executor, orca_binary, handle, deadline))
+            finished = _orca_wait(executor, orca_binary, handle, deadline)
+            if finished.returncode != 0:
+                return _dispatch_proc(finished)
+
+            # Output.md can land after idle is reported; wait before close.
+            time.sleep(10)
+            return _dispatch_proc(finished)
         finally:
             if handle is not None:
                 try:
