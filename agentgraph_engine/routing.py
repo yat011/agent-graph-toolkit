@@ -61,6 +61,14 @@ def matches_result_keyword(line: str, keyword: str) -> bool:
     return line.strip().casefold().startswith(keyword.strip().casefold())
 
 
+def any_matching_result_phrase(phrases: list[str], keyword: str) -> str | None:
+    """Any phrase in `phrases` that `matches_result_keyword`, or None. Order does not matter."""
+    for phrase in phrases:
+        if matches_result_keyword(phrase, keyword):
+            return phrase
+    return None
+
+
 def classify_gate(state: dict, config: GateConfig, self_node: str) -> dict:
     """Classify one gate's `Result:` line.
 

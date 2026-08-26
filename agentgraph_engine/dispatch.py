@@ -168,12 +168,17 @@ def preflight_role_prompts(graph_py: Path) -> None:
         load_role_prompt(role)
 
 
+def result_phrases(text: Optional[str]) -> list[str]:
+    """Every `Result: <phrase>` heading in `text`, prefix stripped, in file order."""
+    if not isinstance(text, str) or not text:
+        return []
+    return [match.strip() for match in RESULT_LINE_RE.findall(text)]
+
+
 def extract_result_line(text: Optional[str]) -> Optional[str]:
     """Extract the last `Result: <phrase>` line's phrase (prefix stripped), or None."""
-    if not isinstance(text, str) or not text:
-        return None
-    matches = RESULT_LINE_RE.findall(text)
-    return matches[-1].strip() if matches else None
+    phrases = result_phrases(text)
+    return phrases[-1] if phrases else None
 
 
 def attach_usage(record: dict, result: DispatchResult) -> None:

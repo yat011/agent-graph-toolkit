@@ -29,6 +29,7 @@ from agentgraph_engine.constants import (
     OUTCOME_SUCCESS,
     RESULT_ACCEPT,
     RESULT_IMPLEMENTED,
+    RESULT_KEY,
     RESULT_REJECT,
     RESULT_STOPPED,
     REVIEW_NODE,
@@ -218,6 +219,29 @@ def test_rejected_three_times_pauses_with_redrive_implement(monkeypatch, build_g
     assert result[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 3
     assert result[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 3
     assert not (tmp_path / "05_manual_flag").exists()
+
+
+def test_any_result_implemented_line_proceeds_to_review(monkeypatch, build_graph, tmp_path):
+    """Any `Result: implemented` heading is enough, including when it is not first."""
+    executor, calls = _script_executor(
+        [
+            (
+                "Result: 6 passed, 1 failed, 0 skipped (tool TotalTests field)\n\n"
+                "Result: implemented\n",
+                True,
+            ),
+            (f"Result: {RESULT_ACCEPT}", True),
+        ]
+    )
+    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", executor)
+
+    result = _invoke(
+        build_graph, {RUN_DIR_KEY: str(tmp_path), ITEM_KEY: {"title": "t", "description": "d"}}
+    )
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert result[IMPLEMENT_REQUIREMENTS_NODE][RESULT_KEY] == RESULT_IMPLEMENTED
+    assert result[REVIEW_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert calls["n"] == 2
 
 
 def test_stopped_without_completing_pauses_with_redrive_implement(monkeypatch, build_graph, tmp_path):

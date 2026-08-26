@@ -26,6 +26,7 @@ from agentgraph_engine.dispatch import (
     load_role_prompt,
     preflight_role_prompts,
     required_roles_from_graph_path,
+    result_phrases,
 )
 from agentgraph_engine.graph_loader import TEMPLATES_ROOT
 from agentgraph_engine.worker_cli import UnknownGraphModelError, resolve_worker_cli
@@ -227,6 +228,15 @@ def test_extract_result_line_takes_last_match_and_strips_prefix():
     assert extract_result_line("Result: a\nResult: rejected - x") == "rejected - x"
     assert extract_result_line("no result here") is None
     assert extract_result_line(None) is None
+
+
+def test_result_phrases_returns_every_heading_in_order():
+    assert result_phrases("Result: implemented\nResult: 6 passed\n") == [
+        "implemented",
+        "6 passed",
+    ]
+    assert result_phrases("no result here") == []
+    assert result_phrases(None) == []
 
 
 def test_extract_result_line_heading_and_case():

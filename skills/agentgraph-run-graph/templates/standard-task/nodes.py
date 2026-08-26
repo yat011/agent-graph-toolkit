@@ -28,9 +28,9 @@ from agentgraph_engine.constants import (
     STANDARD_TASK_SUCCESS_DIR,
     REDRIVE_MESSAGE_KEY,
 )
-from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry
+from agentgraph_engine.dispatch import attach_usage, dispatch_with_retry, result_phrases
 from agentgraph_engine.pause import gate_redrive_node, halt_fields, redrive_note_block
-from agentgraph_engine.routing import classify_gate, matches_result_keyword
+from agentgraph_engine.routing import any_matching_result_phrase, classify_gate
 from agentgraph_engine.runs import node_output_path
 from agentgraph_engine.states.standard_task import StandardTaskState
 
@@ -149,17 +149,23 @@ def implement_requirements(state: StandardTaskState) -> dict:
                 redrive_node=IMPLEMENT_REQUIREMENTS_NODE,
             ),
         }
-    record[RESULT_KEY] = result.result_line
+    phrases = result_phrases(output_path.read_text(encoding="utf-8"))
+    implemented = any_matching_result_phrase(phrases, RESULT_IMPLEMENTED)
+    stopped = any_matching_result_phrase(phrases, RESULT_STOPPED)
+    if implemented is not None:
+        record[RESULT_KEY] = implemented
+        halt_reason = None
+    elif stopped is not None:
+        record[RESULT_KEY] = stopped
+        halt_reason = HALT_MANUAL_REQUESTED
+    else:
+        record[RESULT_KEY] = result.result_line
+        halt_reason = HALT_UNRECOGNIZED_RESULT
     update = {IMPLEMENT_REQUIREMENTS_NODE: record}
-    if not matches_result_keyword(result.result_line, RESULT_IMPLEMENTED):
-        reason = (
-            HALT_MANUAL_REQUESTED
-            if matches_result_keyword(result.result_line, RESULT_STOPPED)
-            else HALT_UNRECOGNIZED_RESULT
-        )
+    if halt_reason is not None:
         update.update(
             halt_fields(
-                reason=reason,
+                reason=halt_reason,
                 redrive_node=IMPLEMENT_REQUIREMENTS_NODE,
                 reset_attempts=True,
             )

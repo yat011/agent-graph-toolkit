@@ -19,7 +19,13 @@ from agentgraph_engine.constants import (
     ROUTE_KEY,
     SUCCESS_NODE,
 )
-from agentgraph_engine.routing import GateConfig, classify_gate, gate_route, matches_result_keyword
+from agentgraph_engine.routing import (
+    GateConfig,
+    any_matching_result_phrase,
+    classify_gate,
+    gate_route,
+    matches_result_keyword,
+)
 
 REVIEW_GATE = GateConfig(
     retry_target=IMPLEMENT_REQUIREMENTS_NODE,
@@ -91,6 +97,12 @@ def test_classify_gate_manual_keyword_constant_matches_result_manual():
     assert RESULT_MANUAL == "manual"
     state = {REVIEW_NODE: {RESULT_KEY: RESULT_MANUAL}}
     assert classify_gate(state, REVIEW_GATE, REVIEW_NODE)[ROUTE_KEY] == MANUAL
+
+
+def test_any_matching_result_phrase_ignores_order():
+    later = ["6 passed, 1 failed", "implemented"]
+    assert any_matching_result_phrase(later, "implemented") == "implemented"
+    assert any_matching_result_phrase(["6 passed"], "implemented") is None
 
 
 def test_matches_result_keyword_is_case_insensitive():

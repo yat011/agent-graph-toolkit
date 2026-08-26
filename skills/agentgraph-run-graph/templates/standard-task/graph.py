@@ -4,7 +4,7 @@ Loaded dynamically via `agentgraph_engine.graph_loader` — never copied into a 
 `agent_works/` (CONTEXT.md's "Template graph").
 
     02_implement_requirements
-     |-[implemented]-------------------------> 03_review
+     |-[any Result: implemented]-------------> 03_review
      `-[stopped / anything else]-------------> pause_node (redrive implement, reset)
 
     03_review
