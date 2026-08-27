@@ -57,3 +57,22 @@ _Avoid_: Agent definition, persona, instruction, system prompt.
 The per-dispatch brief a Node gives a Worker: what to read, the `Result:` line that Node's router
 matches, and this-run context. Contains no role craft.
 _Avoid_: Instruction, node prompt.
+
+**Monitor**:
+A read-only view onto one or more Runs' current state. Never mutates a Run — acting on a paused
+Run (redrive) stays on the existing CLI.
+
+**Fleet**:
+The set of Runs a Monitor is currently showing. Defaults to every Run that is not yet Completed;
+Completed Runs remain inspectable on request.
+
+**Run status**:
+The five states a Run is shown in — Running, Paused-awaiting-redrive, Blocked, Failed, Completed.
+Running and Completed are inferred purely from whether the Run has pending Nodes left to execute:
+the toolkit has no separate signal for "a process is touching this Run right this instant," so
+Running means "not finished," not "actively executing this instant." Paused-awaiting-redrive marks
+a halted Run that only a human's `redrive` can resume. Blocked marks a halted Run that resolves
+itself as other work completes (e.g. an unmet-dependency wait), needing no `redrive`. Failed marks
+a halted Run whose Outcome recorded failure.
+_Avoid_: "active"/"live" alone — name which of the five states, since none of them mean "a process
+is currently executing this."
