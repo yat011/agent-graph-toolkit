@@ -230,6 +230,17 @@ def cmd_redrive(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_monitor(args: argparse.Namespace) -> int:
+    if args.interval <= 0:
+        print(json.dumps({"status": "error", "error": "--interval must be a positive integer"}))
+        return 1
+    agent_works_root = Path(args.agent_works_root) if args.agent_works_root else DEFAULT_AGENT_WORKS_ROOT
+    from agentgraph_engine.monitor.app import MonitorApp
+
+    MonitorApp(agent_works_root=agent_works_root, interval=args.interval).run()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="agentgraph", description="Run/resume/redrive a LangGraph agent-graph Run.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -265,6 +276,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_cli_flag(p_redrive)
     p_redrive.set_defaults(func=cmd_redrive)
+
+    p_monitor = sub.add_parser("monitor", help="Read-only Textual fleet TUI over agent_works Runs (not the one-JSON-object contract).")
+    p_monitor.add_argument("--agent-works-root", default=None)
+    p_monitor.add_argument("--interval", type=int, default=3, help="Fleet/state poll interval in seconds.")
+    p_monitor.set_defaults(func=cmd_monitor)
 
     return parser
 

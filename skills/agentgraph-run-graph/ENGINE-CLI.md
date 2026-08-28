@@ -85,6 +85,29 @@ still END on a technical halt (hello_graph). Production templates pause instead 
 An unrecognized `Result:` line on a gate is `unrecognized_result` and pauses **immediately** —
 there is no self-retry hop.
 
+### `agentgraph monitor [--agent-works-root <path>] [--interval <seconds>]`
+
+A read-only Textual TUI over every Run under `--agent-works-root` (default `agent_works`) —
+**not** the one-JSON-object-to-stdout contract the other four commands share; it draws an
+interactive terminal UI and does not exit until the user quits. There is no `--cli`: `monitor`
+never dispatches a Worker.
+
+A fleet table lists one row per Run (`run_id`, `graph_name`, status, current node) via
+`agentgraph_engine.monitor.discovery.discover_runs` / `.status.fleet_rows` — nested map-item
+threads (`{run_id}:item-*`) are never a second fleet row, only children on their parent's detail
+view. The table hides `Completed` Runs by default; `c` toggles them back in. `Enter` opens the
+selected Run's detail view (status, current node, per-node timings from the checkpoint chain,
+ASCII topology with the current node highlighted, and a selectable table of nested children).
+Selecting a child row and pressing `Enter` again drills into that child's *own* status, current
+node, timings, and topology — compiled from the child's own graph (always `standard-task`, per
+`nodes.py:645-680`, regardless of the parent's `graph_name`), not the parent's. `Escape` returns
+to the previous screen; `q` quits. A timer re-runs discovery and checkpoint reads every
+`--interval` seconds (default `3`; non-positive values are rejected before the TUI starts).
+
+`monitor` only opens Runs' `checkpoints.sqlite` files read-only
+(`agentgraph_engine.monitor.checkpointer.open_readonly_checkpointer`) — a poll tick never calls
+`.invoke()`, `Command(...)`, or `update_state`, and never redrives a paused or halted Run.
+
 ## Halting vs pausing
 
 Production templates (`feature-kickoff`, `standard-task`) **pause** with `interrupt()` instead of

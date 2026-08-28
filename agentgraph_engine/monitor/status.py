@@ -16,9 +16,9 @@ from agentgraph_engine.constants import (
     OUTCOME_KEY,
     RUN_ONE_TASK_NODE,
 )
-from agentgraph_engine.graph_loader import get_build_graph, load_graph_module, resolve_graph_path
 from agentgraph_engine.monitor.checkpointer import open_readonly_checkpointer
 from agentgraph_engine.monitor.discovery import DiscoveredRun
+from agentgraph_engine.monitor.graph_resolve import CHILD_GRAPH_NAME, compiled_graph_for
 from agentgraph_engine.pause import interrupt_payload_from_snapshot
 from agentgraph_engine.runs import thread_config
 
@@ -107,15 +107,21 @@ def fleet_row_from_snapshot(run_id: str, graph_name: str, snapshot: object) -> F
 
 
 def _load_parent_snapshot(run: DiscoveredRun) -> object:
-    agent_works_root = Path(run["run_dir"]).parent.parent.parent
-    path = resolve_graph_path(
-        run["graph_name"],
-        project_graphs_root=agent_works_root / "graphs",
-    )
-    build_graph = get_build_graph(load_graph_module(path))
     with open_readonly_checkpointer(run["checkpoint_path"]) as saver:
-        compiled = build_graph(checkpointer=saver)
+        compiled = compiled_graph_for(run, run["graph_name"], saver)
         return compiled.get_state(thread_config(run["run_id"]))
+
+
+def child_snapshot(run: DiscoveredRun, thread_id: str) -> object:
+    """`get_state` for a nested `{run_id}:item-*` thread, via its own standard-task graph."""
+    with open_readonly_checkpointer(run["checkpoint_path"]) as saver:
+        compiled = compiled_graph_for(run, CHILD_GRAPH_NAME, saver)
+        return compiled.get_state(thread_config(thread_id))
+
+
+def child_row(run: DiscoveredRun, thread_id: str) -> FleetRow:
+    """A child thread's own status/current-node, for drill-in past the parent row."""
+    return fleet_row_from_snapshot(thread_id, CHILD_GRAPH_NAME, child_snapshot(run, thread_id))
 
 
 def child_thread_ids(checkpoint_path: Path, run_id: str) -> list[str]:
