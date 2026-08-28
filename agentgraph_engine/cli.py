@@ -121,12 +121,15 @@ def cmd_resume(args: argparse.Namespace) -> int:
     with open_checkpointer(graph_name, run_id, agent_works_root) as checkpointer:
         compiled = build_graph(checkpointer=checkpointer)
         config = {**thread_config(run_id), "recursion_limit": args.recursion_limit}
-        compiled.update_state(thread_config(run_id), {WORKER_CLI_KEY: worker_cli})
-        resume_input = None
+        # The worker_cli update must ride along with the same invoke() call — a standalone
+        # update_state() before invoke(None) creates an intermediate checkpoint that silently
+        # drops a pending Command(goto=...)-pushed task (e.g. mid-map pick_next_task ->
+        # run_one_task), leaving the run falsely looking finished. See ADR/bug notes.
+        update = {WORKER_CLI_KEY: worker_cli}
         if args.resume_value is not None:
-            from langgraph.types import Command
-
-            resume_input = Command(resume=args.resume_value)
+            resume_input = Command(resume=args.resume_value, update=update)
+        else:
+            resume_input = Command(update=update)
         result = compiled.invoke(resume_input, config=config)
         print(json.dumps({"run_path": str(run_path), "run_id": run_id, **_summarize(result)}))
     return 0
