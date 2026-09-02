@@ -40,7 +40,8 @@ CLAUDE_MODEL_CHEAP = "haiku"
 CLAUDE_MODEL_SONNET = "sonnet"
 CLAUDE_MODEL_OPUS = "opus"
 GROK_MODEL = "grok-4.6"
-CURSOR_MODEL = "cursor-grok-4.6-medium"
+GROK_EFFORT = "high"
+CURSOR_MODEL = "cursor-grok-4.6-high"
 
 _resolved_worker_cli: ContextVar[str | None] = ContextVar("agentgraph_worker_cli", default=None)
 
@@ -300,7 +301,7 @@ class GrokWorkerCli:
             "--model",
             mapped_model,
             "--effort",
-            "medium",
+            GROK_EFFORT,
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:
@@ -464,7 +465,7 @@ class GrokOrcaWorkerCli:
             "--model",
             mapped_model,
             "--effort",
-            "medium",
+            GROK_EFFORT,
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:

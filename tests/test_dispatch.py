@@ -358,7 +358,7 @@ _GROK_TAIL = [
     "--model",
     "grok-4.6",
     "--effort",
-    "medium",
+    "high",
 ]
 _CURSOR_TAIL = [
     "-p",
@@ -674,7 +674,7 @@ def test_grok_orca_dispatch_drives_orca_create_wait_send_wait_close(tmp_path, mo
     assert "--model" in command
     assert "grok-4.6" in command
     assert "--effort" in command
-    assert "medium" in command
+    assert "high" in command
     assert "-p" not in command.split()
     assert "--output-format" not in command
     assert "--always-approve" not in command
