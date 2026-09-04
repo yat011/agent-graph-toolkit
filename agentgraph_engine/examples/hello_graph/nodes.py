@@ -71,7 +71,7 @@ def dispatch_worker(state: HelloState) -> dict:
     output_path = run_dir / "dispatch_worker" / "attempt-1" / "output.md"
     record: dict = {ATTEMPT_COUNT_KEY: 1, OUTPUT_PATH_KEY: str(output_path)}
     result = dispatch_with_retry(
-        retry=1,
+        retry=0,
         role=ROLE_GENERAL_PURPOSE,
         task_prompt=f"""Say hello in one short sentence. End your output with a single-line `Result: {RESULT_GREETED}` conclusion.
 """,

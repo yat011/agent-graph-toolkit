@@ -387,7 +387,7 @@ def planner(state: FeatureKickoffState) -> dict:
     output_path = node_output_path(run_dir, PLANNER_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
     result = dispatch_with_retry(
-        retry=1,
+        retry=0,
         role="planner",
         task_prompt=_planner_prompt(state, run_dir, attempt),
         output_path=output_path,
@@ -913,7 +913,7 @@ def integration_fix(state: FeatureKickoffState) -> dict:
     output_path = node_output_path(run_dir, INTEGRATION_FIX_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
     result = dispatch_with_retry(
-        retry=1,
+        retry=0,
         role="code-writer",
         task_prompt=_integration_fix_prompt(state),
         output_path=output_path,
@@ -1023,7 +1023,7 @@ def final_reviewer(state: FeatureKickoffState) -> dict:
     output_path = node_output_path(run_dir, FINAL_REVIEWER_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
     result = dispatch_with_retry(
-        retry=1,
+        retry=0,
         role="final-reviewer",
         task_prompt=_final_reviewer_prompt(state),
         output_path=output_path,

@@ -1,7 +1,8 @@
 """Worker CLI identities, once-per-process selection, and vendor argv/envelope implementations.
 
 A Run dispatches every Worker through one Worker CLI — `claude`, `grok`, `cursor`
-(binary `cursor-agent`), or `grok-orca` (Grok TUI hosted in an Orca pane). Selection
+(binary `cursor-agent`), `grok-orca` (Grok TUI hosted in an Orca pane), or `muse`
+(Muse Code `muse exec --json`). Selection
 happens once per engine process (`--cli` > `~/.agents/agentgraph.json` > `claude`) and
 lives in a ContextVar for the life of that process. `dispatch_worker` reads
 `current_worker_cli()`; it does not re-run the cascade, and the checkpointed value is
@@ -30,6 +31,7 @@ from agentgraph_engine.constants import (
     WORKER_CLI_GROK_ORCA,
     WORKER_CLI_IDENTITIES,
     WORKER_CLI_KEY,
+    WORKER_CLI_MUSE,
 )
 
 GRAPH_MODEL_HAIKU = "haiku"
@@ -42,6 +44,13 @@ CLAUDE_MODEL_OPUS = "opus"
 GROK_MODEL = "grok-4.6"
 GROK_EFFORT = "high"
 CURSOR_MODEL = "cursor-grok-4.6-high"
+# Muse reasoning effort per graph model tier. `muse exec` takes no vendor model id for
+# the Meta provider, so the tier maps onto its documented effort ladder instead; sonnet
+# maps to the CLI default (`high`). Recorded as the usage `model` value, like the
+# vendor model strings above.
+MUSE_EFFORT_CHEAP = "low"
+MUSE_EFFORT_SONNET = "high"
+MUSE_EFFORT_OPUS = "max"
 
 _resolved_worker_cli: ContextVar[str | None] = ContextVar("agentgraph_worker_cli", default=None)
 
@@ -355,6 +364,101 @@ class CursorWorkerCli:
         return executor(self.argv(resolved_binary, mapped_model, prompt), prompt, timeout)
 
 
+def _muse_terminal_result(stdout: str) -> tuple[str | None, str | None]:
+    """Scan `muse exec --json` JSONL stdout for the terminal result text and session id.
+
+    Returns `(text, session_id)`; each is None when its event is absent. A `(None,
+    None)` return means stdout is not muse JSONL at all (e.g. a single-object test
+    envelope), and the caller must leave the process output untouched.
+    """
+    text: str | None = None
+    session_id: str | None = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if session_id is None:
+            stream = event.get("stream")
+            if isinstance(stream, dict) and stream.get("kind") == "session":
+                candidate = stream.get("id")
+                if isinstance(candidate, str) and candidate:
+                    session_id = candidate
+        payload = event.get("payload")
+        if isinstance(payload, dict) and payload.get("kind") == "run_terminal":
+            candidate = payload.get("text")
+            if isinstance(candidate, str):
+                text = candidate
+    return text, session_id
+
+
+class MuseWorkerCli:
+    """Worker CLI identity: Muse Code headless `muse exec --json` with a positional prompt."""
+
+    identity = WORKER_CLI_MUSE
+    binary = WORKER_CLI_MUSE
+
+    def resolve_model(self, graph_model: str | None) -> str:
+        row = _graph_model_row(graph_model)
+        return {
+            MODEL_CHEAP: MUSE_EFFORT_CHEAP,
+            GRAPH_MODEL_SONNET: MUSE_EFFORT_SONNET,
+            GRAPH_MODEL_OPUS: MUSE_EFFORT_OPUS,
+        }[row]
+
+    def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]:
+        # `exec` reads the prompt from its positional arg (never stdin) and emits JSONL
+        # events on stdout, not one JSON object. Headless workers must never block on
+        # approval or interactive input, and must write files plus run shell commands, so
+        # approval is off, the sandbox is off, and user-input prompts auto-resolve.
+        # `--trust-workspace` gives the worker this workspace's skills/rules, the parity
+        # with what a `claude -p` worker loads by default. The prompt stays last: it is
+        # positional, so no flag may follow it.
+        return [
+            resolved_binary,
+            "exec",
+            "--json",
+            "--approval-mode",
+            "never",
+            "--disable-sandbox",
+            "--trust-workspace",
+            "--user-input-auto-resolve",
+            "--reasoning-effort",
+            mapped_model,
+            prompt,
+        ]
+
+    def parse_envelope(self, envelope: dict) -> dict:
+        # muse JSONL carries no token/cost envelope; run() already lifted the terminal
+        # text into {"result": ...} before dispatch parses it.
+        return _null_usage()
+
+    def run(
+        self,
+        resolved_binary: str,
+        mapped_model: str,
+        prompt: str,
+        timeout: int | None,
+        executor: WorkerExecutor,
+        output_path: Path,
+    ) -> subprocess.CompletedProcess:
+        proc = executor(self.argv(resolved_binary, mapped_model, prompt), prompt, timeout)
+        text, session_id = _muse_terminal_result(proc.stdout or "")
+        if text is None and session_id is None:
+            return proc
+        return subprocess.CompletedProcess(
+            proc.args,
+            proc.returncode,
+            stdout=json.dumps({"result": text, "session_id": session_id}),
+            stderr=proc.stderr or "",
+        )
+
+
 def _join_command(argv: list[str]) -> str:
     if os.name == "nt":
         return subprocess.list2cmdline(argv)
@@ -572,6 +676,7 @@ _IMPLEMENTATIONS: dict[str, WorkerCli] = {
     WORKER_CLI_GROK: GrokWorkerCli(),
     WORKER_CLI_CURSOR: CursorWorkerCli(),
     WORKER_CLI_GROK_ORCA: GrokOrcaWorkerCli(),
+    WORKER_CLI_MUSE: MuseWorkerCli(),
 }
 
 

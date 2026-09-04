@@ -29,7 +29,7 @@ from agentgraph_engine.pause import INTERRUPT_PARENT_NODE_KEY, NESTED_CHECKPOINT
 _BRANCH_TO_PREFIX = "branch:to:"
 
 # Top-level state fields shared across graphs (states/base.py, states/feature_kickoff.py,
-# states/standard_task.py, states/standard_phase.py, pause.py) as opposed to a node's own `{node_id: {...}}` record
+# states/standard_phase.py, pause.py) as opposed to a node's own `{node_id: {...}}` record
 # channel, which is what `updated_channels` uses to mark "this node ran".
 _GRAPH_LEVEL_CHANNELS = frozenset(
     {

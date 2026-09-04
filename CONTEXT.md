@@ -22,7 +22,9 @@ mechanism across attempts.
 _Avoid_: Subagent (ambiguous with the Coordinating agent's own subagent-dispatch), executor.
 
 **Worker CLI**:
-The Worker CLI a Run uses for every Worker dispatch: `claude`, `grok`, `cursor`, or `grok-orca`.
+The Worker CLI a Run uses for every Worker dispatch: `claude`, `grok`, `cursor`, `grok-orca`,
+or `muse` (Muse Code headless `muse exec --json`; prompt is positional, tier maps to
+`--reasoning-effort`).
 `grok-orca` is a Worker CLI identity — inner TUI is still Grok; Orca hosts the pane.
 Each engine process resolves it once as `--cli` > user setting > `claude`, then keeps that
 value in memory for every dispatch until the process exits. A later `resume`/`redrive` is a
@@ -40,7 +42,7 @@ with its own checkpoint database and folder under `agent_works/{graph_name}/runs
 
 **Template graph**:
 One of the built-in, reusable Graphs shipped inside a skill's own `templates/{name}/graph.py`
-(currently `feature-kickoff`, `standard-phase`, `standard-task`). Loaded dynamically by name at run time — never
+(currently `feature-kickoff`, `standard-phase`). Loaded dynamically by name at run time — never
 copied into a project.
 
 **Coordinating agent**:

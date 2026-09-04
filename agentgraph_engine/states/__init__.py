@@ -9,7 +9,6 @@ from agentgraph_engine.states.feature_kickoff import (
     LoadPhasesNodeState,
 )
 from agentgraph_engine.states.standard_phase import StandardPhaseState
-from agentgraph_engine.states.standard_task import StandardTaskState
 
 __all__ = [
     "AdditionalTestNodeState",
@@ -19,5 +18,4 @@ __all__ = [
     "GateNodeState",
     "LoadPhasesNodeState",
     "StandardPhaseState",
-    "StandardTaskState",
 ]

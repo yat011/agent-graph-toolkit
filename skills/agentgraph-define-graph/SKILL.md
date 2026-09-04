@@ -22,7 +22,7 @@ Before doing anything else, read `CONTEXT.md` (repo root) for this toolkit's glo
 Node, Worker, Executor, Run, Template graph) and `agentgraph_engine/dispatch.py`'s module
 docstring for the exact `dispatch_worker`/`dispatch_with_retry` signatures this skill's generated
 code must call — do not re-derive or duplicate either from memory. Reading the two shipped
-templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-phase,standard-task}/`) is
+templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-phase}/`) is
 the fastest way to see the idiom this skill must reproduce: composed per-node `TypedDict` records
 from `agentgraph_engine.states`, one explicit node function per unit of work (in that template's
 `nodes.py`), a router function per branching node, `build_graph(checkpointer=None)` compiling
@@ -71,7 +71,7 @@ cover the work end to end. For each unit of work, decide:
 - **Node kind** (all three compile down to plain `StateGraph` code — there is no DSL-level type
   tag to set, this is a design vocabulary only):
   - **Dispatch node** — a node function that calls
-    `agentgraph_engine.dispatch.dispatch_with_retry(retry=N, role=..., task_prompt=..., output_path=...)`
+    `agentgraph_engine.dispatch.dispatch_with_retry(retry=0, role=..., task_prompt=..., output_path=...)`
     and returns a state update built from the result. Use for any discrete, one-shot piece of
     Worker work (implement a thing, review a thing, write a doc). If `dispatch_with_retry`'s result
     isn't `ok`, the node must return halt fields (`halted`, `halt_reason: "retries_exhausted"`,
@@ -80,7 +80,7 @@ cover the work end to end. For each unit of work, decide:
     terminal wired to `END`. `agentgraph redrive` resumes the pause (`Command(resume="redrive")`)
     then `Command(goto=redrive_node)`.
     A **receipt** node (the old engine's `receipt: true`) is a node function that writes its own
-    `output.md` directly (no dispatch) — see `standard-task/graph.py`'s `success` node.
+    `output.md` directly (no dispatch) — see `standard-phase/graph.py`'s `success` node.
   - **Map/fan-out node** — a node function that loops **sequentially** (no concurrent dispatch,
     per this migration's settled design) over a list already present in state (produced by an
     earlier node), dispatching or recursing once per item. Honor an item's own `dependencies`
@@ -105,14 +105,14 @@ cover the work end to end. For each unit of work, decide:
   string-similarity matcher.** Branch judgment is code, not an LLM decision. Wire the
   router via `graph.add_conditional_edges(node_name, router_fn, {"branch_label": "target_node",
   ...})`.
-- **Retries** (`dispatch_with_retry(retry=N, ...)`) — set `N > 0` for nodes whose failure is more
-  likely a transient/technical glitch than a substantive problem; `0` otherwise. This is
+- **Retries** (`dispatch_with_retry(retry=0, ...)`) — production nodes always pass `retry=0`.
+  A technical CLI failure pauses for a human `redrive`; do not auto-replay the Worker. This is
   independent of a branch-driven loop-back (e.g. "review rejected, try again") — a loop-back needs
   its own attempt counter in state (an int field incremented once per entry into the looped node),
   checked by the router so the loop is self-bounding (see the "Loops must self-limit" convention
   below). If a node's dispatch prompt causes side effects that aren't safe to blindly repeat,
   phrase the prompt so it checks existing state before acting, per the retry-idempotency
-  convention below, rather than skipping retry.
+  convention below.
 - **Aggregation** — a node that depends on a map node's fanned-out results reads them from state
   directly (they're already in-process Python data, unlike the old file-based engine) — but if
   that data needs to reach a **Worker's prompt**, pass a file path there, never paste the content
@@ -194,10 +194,9 @@ These carry over from the retired `graph.md` engine, translated to Python:
 - **Result-line convention.** Every dispatch node a router reads from must have its prompt end
   with a single-line `Result: <phrase>` conclusion; the router does plain string matching against
   the literal phrases you told the prompt to produce.
-- **Retry-idempotency note.** `retry` re-runs a node's dispatch from scratch after technical
-  failure. If a node's prompt performs side effects that aren't safe to repeat, phrase the prompt
-  to check existing state before acting (e.g. "if X already exists, treat as done") rather than
-  assuming a clean slate.
+- **Retry-idempotency note.** Production nodes do not technically retry. A human `redrive` re-runs
+  a node's dispatch from scratch after a pause. Phrase prompts to check existing state before
+  acting (e.g. "if X already exists, treat as done") rather than assuming a clean slate.
 - **Sticky-research convention for loop-back retries.** A rejection-driven loop-back (e.g. a review
   node routing back to the node it reviewed) is fixing specific flagged issues, not starting a
   fresh investigation. Have the looped-back node's prompt read its own immediately preceding

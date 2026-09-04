@@ -1,11 +1,11 @@
 """Shared dispatch/executor module.
 
 Dispatches one Worker per call via the process Worker CLI (Claude Code `claude`, Grok Build
-`grok`, Cursor Agent `cursor-agent`, or `grok-orca` — Grok TUI hosted in an Orca pane; see
-`worker_cli.py`). Every dispatch is stateless: this module never passes `--resume`/`--continue`,
-and never tracks/reuses a `session_id` across calls — a Node's own file-based context (paths
-passed in its prompt) plus the Graph's checkpointer state are the only continuity mechanism
-across attempts.
+`grok`, Cursor Agent `cursor-agent`, `grok-orca` — Grok TUI hosted in an Orca pane, or Muse
+Code `muse`; see `worker_cli.py`). Every dispatch is stateless: this module never passes
+`--resume`/`--continue`, and never tracks/reuses a `session_id` across calls — a Node's own
+file-based context (paths passed in its prompt) plus the Graph's checkpointer state are the
+only continuity mechanism across attempts.
 
 No provider API key is used or read anywhere in this module. The Executor (the `executor`
 callable) is the pluggable in-process seam: swapping the real subprocess for a test fake
@@ -14,10 +14,15 @@ not by a `cli=` argument on this function or on any node. `dispatch_worker` alwa
 `WorkerCli.run`; it never invokes `executor` on vendor argv itself.
 
 A failing/erroring CLI call is an ordinary technical failure, surfaced via
-`DispatchResult.ok is False`, subject to each Node's own `retry` count via `dispatch_with_retry`.
+`DispatchResult.ok is False`. Production templates pass `retry=0` — the first failure
+pauses for a human `redrive`. Gate reject loops (reviewer → implement) are separate
+and stay in graph routers. A Worker killed after writing a `Result:` line in
+`output.md` still counts as `ok` so a wall-clock timeout cannot duplicate finished work.
 Claude and Cursor receive the combined prompt on stdin; Grok's `-p` requires that same
 prompt as the option value (stdin is still populated for the executor seam). `grok-orca`
-sends the combined prompt via `orca terminal send --text`, not grok argv.
+sends the combined prompt via `orca terminal send --text`, not grok argv. Muse takes the
+prompt as its `exec` positional arg (stdin is still populated for the executor seam) and
+emits JSONL, whose terminal text its `run` lifts into the envelope before parsing.
 """
 
 from __future__ import annotations
@@ -46,6 +51,30 @@ RESULT_LINE_RE = re.compile(r"(?im)^(?:#{1,6}\s+)?Result:\s*(.+?)\s*$")
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
 USAGE_FILENAME = "usage.json"
+DISPATCH_TIMEOUT_SECONDS = 7200
+
+
+def _dispatch_ok(returncode: int, output_exists: bool, result_line: Optional[str]) -> bool:
+    """Success if the worker wrote output.md and either exited 0 or left a Result line.
+
+    A wall-clock kill after the worker already wrote `Result:` must not look like a
+    technical failure (that used to retrigger a full second dispatch).
+    """
+    if not output_exists:
+        return False
+    if returncode == 0:
+        return True
+    return result_line is not None
+
+
+def _stdio_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
 
 # Last prompt line. Test fakes parse the output path off this prefix; keep it last.
 OUTPUT_PATH_LINE_PREFIX = "Write your required output to this exact file path before finishing: "
@@ -203,7 +232,7 @@ def dispatch_worker(
     task_prompt: str,
     output_path: Path | str,
     model: Optional[str] = None,
-    timeout: Optional[int] = 1800,
+    timeout: Optional[int] = DISPATCH_TIMEOUT_SECONDS,
     executor: Optional[Executor] = None,
 ) -> DispatchResult:
     """Dispatch one stateless Worker call.
@@ -216,7 +245,9 @@ def dispatch_worker(
     an undocumented CLI flag.
 
     `output_path` not existing after the call (worker crashed, or simply didn't write it) makes
-    `ok=False` — an ordinary technical failure, same as a non-zero exit code.
+    `ok=False` — an ordinary technical failure, same as a non-zero exit with no `Result:` line.
+    Non-zero exit (including TimeoutExpired) is still `ok` when `output.md` already has a
+    `Result:` line.
     """
     executor = executor or _run_subprocess
     persona = load_role_prompt(role)
@@ -261,17 +292,28 @@ def dispatch_worker(
             executor,
             output_path,
         )
-    except Exception as exc:  # subprocess couldn't start, timed out, etc. — technical failure
+    except subprocess.TimeoutExpired as exc:
+        proc = subprocess.CompletedProcess(
+            getattr(exc, "cmd", None) or [],
+            -1,
+            stdout=_stdio_text(exc.stdout),
+            stderr=_stdio_text(exc.stderr) + f"\nTimeoutExpired after {timeout}s",
+        )
+    except Exception as exc:  # subprocess couldn't start, etc.
         usage = build_usage(identity=identity, mapped_model=mapped_model, envelope={})
         _write_usage_json(output_path, usage)
+        output_exists = output_path.exists()
+        result_line = (
+            extract_result_line(output_path.read_text(encoding="utf-8")) if output_exists else None
+        )
         return DispatchResult(
-            ok=False,
+            ok=_dispatch_ok(-1, output_exists, result_line),
             result_text=None,
-            result_line=None,
+            result_line=result_line,
             session_id=None,
             cost_usd=None,
             output_path=output_path,
-            output_exists=output_path.exists(),
+            output_exists=output_exists,
             exit_code=-1,
             stderr=str(exc),
             usage=usage,
@@ -302,7 +344,7 @@ def dispatch_worker(
     if result_line is None:
         result_line = extract_result_line(result_text)
 
-    ok = (proc.returncode == 0) and output_exists
+    ok = _dispatch_ok(proc.returncode, output_exists, result_line)
     return DispatchResult(
         ok=ok,
         result_text=result_text,

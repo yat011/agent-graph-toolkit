@@ -15,7 +15,7 @@ Loaded dynamically via `agentgraph_engine.graph_loader` — never copied into a 
      |-[reject×3]-----------------------------> pause_node (redrive implement, reset)
      `-[manual / unrecognized]----------------> pause_node (redrive review, reset)
 
-A Worker CLI dispatch that fails after exhausting `retry` pauses with redrive=the failed
+A Worker CLI dispatch that fails (`retry=0`) pauses with redrive=the failed
 node and reset_attempts=True. Gates pause with `interrupt()` instead of routing to END.
 Skip-review still commits dirty files in-process (no Worker) so the next phase starts clean.
 """

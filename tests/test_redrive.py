@@ -29,6 +29,7 @@ from agentgraph_engine.constants import (
     RESULT_MANUAL,
     RESULT_REJECT,
     REVIEW_NODE,
+    REVIEW_POLICY_ALWAYS,
     RUN_DIR_KEY,
 )
 from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
@@ -62,12 +63,16 @@ def _script_executor(steps):
     return executor
 
 
-def _standard_task_build_graph():
-    return get_build_graph(load_graph_module(resolve_graph_path("standard-task")))
+def _phase_item() -> dict:
+    return {"title": "t", "description": "d", "review": REVIEW_POLICY_ALWAYS}
+
+
+def _standard_phase_build_graph():
+    return get_build_graph(load_graph_module(resolve_graph_path("standard-phase")))
 
 
 def test_redrive_resets_attempt_count_after_reject_budget_pause(monkeypatch, tmp_path):
-    graph_name = "standard-task"
+    graph_name = "standard-phase"
     run_id = "20260101T000000_demo"
     agent_works_root = tmp_path / "agent_works"
     run_dir = run_dir_for(graph_name, run_id, agent_works_root)
@@ -87,9 +92,9 @@ def test_redrive_resets_attempt_count_after_reject_budget_pause(monkeypatch, tmp
     )
     config = thread_config(run_id)
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = _standard_task_build_graph()(checkpointer=cp)
+        compiled = _standard_phase_build_graph()(checkpointer=cp)
         paused_state = compiled.invoke(
-            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: {"title": "t", "description": "d"}},
+            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: _phase_item()},
             config={**config, "recursion_limit": 50},
         )
 
@@ -111,7 +116,7 @@ def test_redrive_resets_attempt_count_after_reject_budget_pause(monkeypatch, tmp
     assert exit_code == 0
 
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = _standard_task_build_graph()(checkpointer=cp)
+        compiled = _standard_phase_build_graph()(checkpointer=cp)
         final_state = compiled.get_state(config).values
 
     assert final_state[OUTCOME_KEY] == OUTCOME_SUCCESS
@@ -122,10 +127,8 @@ def test_redrive_resets_attempt_count_after_reject_budget_pause(monkeypatch, tmp
 
 
 def test_redrive_of_a_plain_technical_failure_resets_attempt_count(monkeypatch, tmp_path):
-    """A `retries_exhausted` pause keeps its attempt_count: Command(goto) from after the
-    failed visit increments on the next successful implement (3, not a reset to 1).
-    """
-    graph_name = "standard-task"
+    """A `retries_exhausted` pause is redriven with attempt_count reset to 1."""
+    graph_name = "standard-phase"
     run_id = "20260101T000000_technical"
     agent_works_root = tmp_path / "agent_works"
     run_dir = run_dir_for(graph_name, run_id, agent_works_root)
@@ -137,15 +140,14 @@ def test_redrive_of_a_plain_technical_failure_resets_attempt_count(monkeypatch, 
                 (f"Result: {RESULT_IMPLEMENTED}", True),
                 (f"Result: {RESULT_REJECT} — bad", True),
                 (None, False),
-                (None, False),
             ]
         ),
     )
     config = thread_config(run_id)
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = _standard_task_build_graph()(checkpointer=cp)
+        compiled = _standard_phase_build_graph()(checkpointer=cp)
         paused_state = compiled.invoke(
-            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: {"title": "t", "description": "d"}},
+            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: _phase_item()},
             config={**config, "recursion_limit": 50},
         )
 
@@ -166,14 +168,14 @@ def test_redrive_of_a_plain_technical_failure_resets_attempt_count(monkeypatch, 
     assert exit_code == 0
 
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = _standard_task_build_graph()(checkpointer=cp)
+        compiled = _standard_phase_build_graph()(checkpointer=cp)
         final_state = compiled.get_state(config).values
 
     assert final_state[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert final_state[IMPLEMENT_REQUIREMENTS_NODE][ATTEMPT_COUNT_KEY] == 1
 
 def test_redrive_message_is_injected_into_reviewer_prompt(monkeypatch, tmp_path):
-    graph_name = "standard-task"
+    graph_name = "standard-phase"
     run_id = "20260101T000000_note"
     agent_works_root = tmp_path / "agent_works"
     run_dir = run_dir_for(graph_name, run_id, agent_works_root)
@@ -189,9 +191,9 @@ def test_redrive_message_is_injected_into_reviewer_prompt(monkeypatch, tmp_path)
     )
     config = thread_config(run_id)
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = _standard_task_build_graph()(checkpointer=cp)
+        compiled = _standard_phase_build_graph()(checkpointer=cp)
         paused_state = compiled.invoke(
-            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: {"title": "t", "description": "d"}},
+            {RUN_DIR_KEY: str(run_dir), ITEM_KEY: _phase_item()},
             config={**config, "recursion_limit": 50},
         )
     assert interrupt_payload_from_result(paused_state) is not None
@@ -218,7 +220,7 @@ def test_redrive_message_is_injected_into_reviewer_prompt(monkeypatch, tmp_path)
     assert "Human redrive note" in joined
 
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = _standard_task_build_graph()(checkpointer=cp)
+        compiled = _standard_phase_build_graph()(checkpointer=cp)
         final_state = compiled.get_state(config).values
     assert final_state[OUTCOME_KEY] == OUTCOME_SUCCESS
 

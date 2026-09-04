@@ -90,8 +90,8 @@ def test_resolve_template_path_finds_real_repo_templates():
     templates_root = Path(__file__).resolve().parent.parent / "skills" / "agentgraph-run-graph" / "templates"
     path = resolve_template_path("standard-phase", templates_root)
     assert path.name == "graph.py"
-    path_task = resolve_template_path("standard-task", templates_root)
-    assert path_task.name == "graph.py"
+    path_kickoff = resolve_template_path("feature-kickoff", templates_root)
+    assert path_kickoff.name == "graph.py"
 
 
 def test_resolve_template_path_missing_graph_raises(tmp_path):

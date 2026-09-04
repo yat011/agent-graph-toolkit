@@ -80,10 +80,9 @@ skills/
     ENGINE-CLI.md                      # the `agentgraph` CLI's command contract
     templates/feature-kickoff/graph.py  # spec -> plan -> per-phase implement / conditional review
                                         # then additional_test (+ one integration_fix) then final-reviewer
-    templates/standard-phase/graph.py   # per-phase subgraph used by feature-kickoff
-    templates/standard-task/graph.py    # standalone always-review subgraph (single-bug / chore)
+    templates/standard-phase/graph.py   # per-phase subgraph; also the standalone one-slice graph
   agentgraph-phase-sizing/              # how to size kickoff phases (sequential, context-window)
-  agentgraph-vertical-slice-tasks/      # standalone standard-task sizing; not for kickoff
+  agentgraph-vertical-slice-tasks/      # standalone standard-phase sizing; not for kickoff
   agentgraph-code-review-standards/     # Standards vs Spec review
   agentgraph-test-quality-bar/
   agentgraph-research-primary-sources/
@@ -94,7 +93,7 @@ agents/
   code-writer.md
   reviewer.md
   final-reviewer.md        # e2e / integration gate after additional_test is green
-tests/                       # pytest — dispatch, graph loading, both ported graphs, checkpoint resume
+tests/                       # pytest — dispatch, graph loading, kickoff + phase, checkpoint resume
 ```
 
 Templates load dynamically by name via `agentgraph_engine.graph_loader` — never copied into a

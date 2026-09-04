@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from agentgraph_engine.dispatch import (
+    DISPATCH_TIMEOUT_SECONDS,
     OUTPUT_PATH_LINE_PREFIX,
     RolePromptError,
     dispatch_worker,
@@ -112,7 +113,7 @@ def test_dispatch_missing_output_file_is_technical_failure(tmp_path):
     assert result.output_exists is False
 
 
-def test_dispatch_nonzero_exit_is_technical_failure_even_with_output(tmp_path):
+def test_dispatch_nonzero_exit_with_result_line_is_ok(tmp_path):
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     result = dispatch_worker(
         role=ROLE_GENERAL_PURPOSE,
@@ -120,7 +121,67 @@ def test_dispatch_nonzero_exit_is_technical_failure_even_with_output(tmp_path):
         output_path=output_path,
         executor=make_executor(write_output=True, returncode=1),
     )
+    assert result.ok is True
+    assert result.result_line == "done"
+    assert result.exit_code == 1
+
+
+def test_dispatch_nonzero_exit_without_result_line_is_technical_failure(tmp_path):
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+
+    def executor(argv, input_text, timeout):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("still writing, no result yet\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 1, stdout='{"result":""}', stderr="killed")
+
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
     assert result.ok is False
+    assert result.output_exists is True
+    assert result.result_line is None
+
+
+def test_dispatch_timeout_after_result_line_is_ok(tmp_path):
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+
+    def executor(argv, input_text, timeout):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("Result: implemented\n", encoding="utf-8")
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=timeout, output="", stderr="timed out")
+
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
+    assert result.ok is True
+    assert result.result_line == "implemented"
+    assert result.exit_code == -1
+
+
+def test_dispatch_default_timeout_is_two_hours(tmp_path):
+    seen: dict[str, int | None] = {}
+
+    def executor(argv, input_text, timeout):
+        seen["timeout"] = timeout
+        output_path = tmp_path / "node" / "attempt-1" / "output.md"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("Result: done\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
+
+    dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=tmp_path / "node" / "attempt-1" / "output.md",
+        executor=executor,
+    )
+    assert seen["timeout"] == DISPATCH_TIMEOUT_SECONDS
+    assert DISPATCH_TIMEOUT_SECONDS == 7200
 
 
 def test_dispatch_falls_back_to_result_text_when_output_has_no_result_line(tmp_path):
@@ -286,15 +347,10 @@ def test_dispatch_worker_fails_before_subprocess_when_named_role_missing(tmp_pat
 
 def test_preflight_feature_kickoff_and_nested_templates_pass_with_repo_agents():
     preflight_role_prompts(TEMPLATES_ROOT / "feature-kickoff" / "graph.py")
-    preflight_role_prompts(TEMPLATES_ROOT / "standard-task" / "graph.py")
     preflight_role_prompts(TEMPLATES_ROOT / "standard-phase" / "graph.py")
 
 
 def test_required_roles_skip_general_purpose_and_researcher_unless_dispatched():
-    standard = required_roles_from_graph_path(TEMPLATES_ROOT / "standard-task" / "graph.py")
-    assert "code-writer" in standard
-    assert "reviewer" in standard
-    assert "general-purpose" not in standard
     phase = required_roles_from_graph_path(TEMPLATES_ROOT / "standard-phase" / "graph.py")
     assert "code-writer" in phase
     assert "reviewer" in phase
@@ -310,7 +366,7 @@ def test_required_roles_skip_general_purpose_and_researcher_unless_dispatched():
 
 
 def test_template_nodes_have_no_triple_quoted_fstrings():
-    for name in ("feature-kickoff", "standard-task", "standard-phase"):
+    for name in ("feature-kickoff", "standard-phase"):
         text = (TEMPLATES_ROOT / name / "nodes.py").read_text(encoding="utf-8")
         assert 'f"""' not in text
         assert "f'''" not in text
@@ -321,7 +377,7 @@ def test_preflight_fails_when_agents_dir_is_empty(tmp_path, monkeypatch):
     empty.mkdir()
     monkeypatch.setattr("agentgraph_engine.dispatch.AGENTS_DIR", empty)
     with pytest.raises(RolePromptError):
-        preflight_role_prompts(TEMPLATES_ROOT / "standard-task" / "graph.py")
+        preflight_role_prompts(TEMPLATES_ROOT / "standard-phase" / "graph.py")
 
 
 _CLAUDE_SONNET_TAIL = [
@@ -376,6 +432,39 @@ _CURSOR_TAIL = [
     "--model",
     "cursor-grok-4.6-high",
 ]
+_MUSE_TAIL_LOW = [
+    "exec",
+    "--json",
+    "--approval-mode",
+    "never",
+    "--disable-sandbox",
+    "--trust-workspace",
+    "--user-input-auto-resolve",
+    "--reasoning-effort",
+    "low",
+]
+_MUSE_TAIL_HIGH = [
+    "exec",
+    "--json",
+    "--approval-mode",
+    "never",
+    "--disable-sandbox",
+    "--trust-workspace",
+    "--user-input-auto-resolve",
+    "--reasoning-effort",
+    "high",
+]
+_MUSE_TAIL_MAX = [
+    "exec",
+    "--json",
+    "--approval-mode",
+    "never",
+    "--disable-sandbox",
+    "--trust-workspace",
+    "--user-input-auto-resolve",
+    "--reasoning-effort",
+    "max",
+]
 
 
 @pytest.mark.parametrize(
@@ -393,6 +482,10 @@ _CURSOR_TAIL = [
         ("cursor", "sonnet", "cursor-agent", _CURSOR_TAIL),
         ("cursor", "opus", "cursor-agent", _CURSOR_TAIL),
         ("cursor", None, "cursor-agent", _CURSOR_TAIL),
+        ("muse", MODEL_CHEAP, "muse", _MUSE_TAIL_LOW),
+        ("muse", "sonnet", "muse", _MUSE_TAIL_HIGH),
+        ("muse", "opus", "muse", _MUSE_TAIL_MAX),
+        ("muse", None, "muse", _MUSE_TAIL_HIGH),
     ],
 )
 def test_dispatch_argv_matches_spec_per_cli_and_model(tmp_path, cli, model, binary_stem, argv_tail):
@@ -413,6 +506,11 @@ def test_dispatch_argv_matches_spec_per_cli_and_model(tmp_path, cli, model, bina
         assert argv[1] == "-p"
         assert OUTPUT_PATH_LINE_PREFIX in argv[2]
         assert argv[3:] == argv_tail
+    elif cli == "muse":
+        # muse exec takes the prompt positionally and last — no flag may follow it.
+        assert OUTPUT_PATH_LINE_PREFIX in argv[-1]
+        assert not argv[-1].startswith("-")
+        assert argv[1:-1] == argv_tail
     else:
         assert argv[1:] == argv_tail
     assert "--resume" not in argv
@@ -721,7 +819,8 @@ def test_grok_orca_closes_terminal_when_second_wait_fails(tmp_path, monkeypatch)
         output_path=output_path,
         executor=make_orca_cli_executor(calls, fail_second_wait=True),
     )
-    assert result.ok is False
+    assert result.ok is True
+    assert result.result_line == "done"
     assert [_orca_action(argv) for argv in calls] == [
         "create",
         "wait",
@@ -750,4 +849,140 @@ def test_grok_orca_missing_orca_fails_before_create(tmp_path, monkeypatch):
     assert result.ok is False
     assert calls == []
     assert "orca" in result.stderr.lower()
+
+
+def _muse_jsonl_stdout(*, text: str, session_id: str = "01a06d3d-test-session") -> str:
+    """Minimal `muse exec --json` event stream in the observed live shape."""
+    events = [
+        {
+            "stream": {"kind": "session", "id": session_id},
+            "payload_type": "runtime.command.accepted",
+            "payload": {"kind": "command_accepted"},
+        },
+        {
+            "stream": {"kind": "session", "id": session_id},
+            "payload_type": "run.output.delta",
+            "payload": {"kind": "run_output_delta", "text": text[:8]},
+        },
+        {
+            "stream": {"kind": "session", "id": session_id},
+            "payload_type": "run.terminal.completed",
+            "payload": {"kind": "run_terminal", "terminal": "completed", "text": text},
+        },
+    ]
+    return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+def _muse_executor(*, output_text: str, terminal_text: str, call_log: list | None = None):
+    def executor(argv, input_text, timeout):
+        if call_log is not None:
+            call_log.append((list(argv), input_text))
+        path_line = next(
+            line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+        )
+        out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX) :].strip())
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(output_text, encoding="utf-8")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=_muse_jsonl_stdout(text=terminal_text), stderr=""
+        )
+
+    return executor
+
+
+def test_muse_terminal_text_becomes_result_text_and_session(tmp_path):
+    resolve_worker_cli(cli_flag="muse")
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=_muse_executor(
+            output_text="no result line in the file",
+            terminal_text="closing line\nResult: from-muse-chat",
+        ),
+    )
+    assert result.ok is True
+    assert result.result_text == "closing line\nResult: from-muse-chat"
+    assert result.result_line == "from-muse-chat"
+    assert result.session_id == "01a06d3d-test-session"
+
+
+def test_muse_output_file_result_line_wins_over_terminal_text(tmp_path):
+    resolve_worker_cli(cli_flag="muse")
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=_muse_executor(
+            output_text="Some prose.\nResult: from-file\n",
+            terminal_text="Result: from-muse-chat",
+        ),
+    )
+    assert result.ok is True
+    assert result.result_line == "from-file"
+
+
+def test_muse_single_object_stdout_passes_through_untouched(tmp_path):
+    resolve_worker_cli(cli_flag="muse")
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=make_executor(write_output=True),
+    )
+    assert result.ok is True
+    assert result.result_text == "chat text"
+    assert result.session_id == "sess-1"
+
+
+def test_muse_usage_fields_are_null_with_effort_model(tmp_path):
+    resolve_worker_cli(cli_flag="muse")
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        model="sonnet",
+        executor=_muse_executor(
+            output_text="Result: done\n",
+            terminal_text="Result: done",
+        ),
+    )
+    expected = {
+        "worker_cli": "muse",
+        "model": "high",
+        "cost_usd": None,
+        "input_tokens": None,
+        "output_tokens": None,
+        "cache_read_tokens": None,
+        "cache_write_tokens": None,
+    }
+    usage_path = output_path.parent / "usage.json"
+    assert json.loads(usage_path.read_text(encoding="utf-8")) == expected
+    assert result.usage == expected
+    assert result.cost_usd is None
+
+
+def test_muse_stdin_still_carries_combined_prompt_for_executor_seam(tmp_path):
+    resolve_worker_cli(cli_flag="muse")
+    calls: list = []
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=_muse_executor(
+            output_text="Result: done\n",
+            terminal_text="Result: done",
+            call_log=calls,
+        ),
+    )
+    assert result.ok is True
+    argv, input_text = calls[0]
+    assert OUTPUT_PATH_LINE_PREFIX in input_text
+    assert OUTPUT_PATH_LINE_PREFIX in argv[-1]
+    assert argv[-1] == input_text
 

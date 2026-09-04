@@ -76,10 +76,17 @@ def test_parser_accepts_cli_on_start_resume_redrive():
     assert parser.parse_args(["resume", "--run", "r", "--cli", "cursor"]).cli == "cursor"
     assert parser.parse_args(["redrive", "--run", "r", "--cli", "claude"]).cli == "claude"
     assert parser.parse_args(["start", "--graph", "g", "--cli", "grok-orca"]).cli == "grok-orca"
+    assert parser.parse_args(["start", "--graph", "g", "--cli", "muse"]).cli == "muse"
+    assert parser.parse_args(["resume", "--run", "r", "--cli", "muse"]).cli == "muse"
+    assert parser.parse_args(["redrive", "--run", "r", "--cli", "muse"]).cli == "muse"
 
 
 def test_resolve_worker_cli_accepts_grok_orca():
     assert resolve_worker_cli(cli_flag="grok-orca") == "grok-orca"
+
+
+def test_resolve_worker_cli_accepts_muse():
+    assert resolve_worker_cli(cli_flag="muse") == "muse"
 
 
 def test_status_has_no_cli_flag():

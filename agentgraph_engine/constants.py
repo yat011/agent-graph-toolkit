@@ -66,12 +66,13 @@ WORKER_CLI_CLAUDE = "claude"
 WORKER_CLI_GROK = "grok"
 WORKER_CLI_CURSOR = "cursor"
 WORKER_CLI_GROK_ORCA = "grok-orca"
+WORKER_CLI_MUSE = "muse"
 WORKER_CLI_IDENTITIES = frozenset(
-    {WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR, WORKER_CLI_GROK_ORCA}
+    {WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR, WORKER_CLI_GROK_ORCA, WORKER_CLI_MUSE}
 )
 WORKER_CLI_CURSOR_BINARY = "cursor-agent"
 
-# On-disk attempt-folder names for a nested standard-task / standard-phase run.
+# On-disk attempt-folder names for a nested standard-phase run.
 STANDARD_TASK_SUCCESS_DIR = "04_success"
 HANDOFF_FILENAME = "handoff.md"
 
@@ -86,7 +87,7 @@ RESULT_ACCEPT = "accepted"
 RESULT_REJECT = "rejected"
 RESULT_MANUAL = "manual"
 
-# Business vocabulary — implement_requirements Result: phrases (standard-task / standard-phase).
+# Business vocabulary — implement_requirements Result: phrases (standard-phase).
 RESULT_IMPLEMENTED = "implemented"
 RESULT_STOPPED = "stopped"
 RESULT_COMMITTED = "committed"
@@ -95,7 +96,7 @@ RESULT_COMMITTED = "committed"
 OUTCOME_SUCCESS = "success"
 OUTCOME_BLOCKED = "blocked"
 
-# standard-task / standard-phase production node ids.
+# standard-phase production node ids.
 IMPLEMENT_REQUIREMENTS_NODE = "implement_requirements_node"
 REVIEW_NODE = "review_node"
 SKIP_REVIEW_COMMIT_NODE = "skip_review_commit_node"

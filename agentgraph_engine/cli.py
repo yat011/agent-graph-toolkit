@@ -30,6 +30,7 @@ from agentgraph_engine.constants import (
     WORKER_CLI_GROK,
     WORKER_CLI_GROK_ORCA,
     WORKER_CLI_KEY,
+    WORKER_CLI_MUSE,
 )
 from langgraph.types import Command
 
@@ -46,7 +47,7 @@ from agentgraph_engine.pause import (
 from agentgraph_engine.runs import new_run_id, open_checkpointer, run_dir_for, thread_config
 from agentgraph_engine.worker_cli import WorkerCliError, resolve_worker_cli
 
-WORKER_CLI_CHOICES = (WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR, WORKER_CLI_GROK_ORCA)
+WORKER_CLI_CHOICES = (WORKER_CLI_CLAUDE, WORKER_CLI_GROK, WORKER_CLI_CURSOR, WORKER_CLI_GROK_ORCA, WORKER_CLI_MUSE)
 
 DEFAULT_AGENT_WORKS_ROOT = Path("agent_works")
 
@@ -246,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_start = sub.add_parser("start", help="Start a fresh Run of a named template graph.")
-    p_start.add_argument("--graph", required=True, help="Template graph name (feature-kickoff, standard-phase, standard-task, ...).")
+    p_start.add_argument("--graph", required=True, help="Template graph name (feature-kickoff, standard-phase, ...).")
     p_start.add_argument("--slug", default=None, help="Short kebab-case slug for the run folder name.")
     p_start.add_argument("--spec", default=None, help="Path to the input spec (feature-kickoff).")
     p_start.add_argument("--input-json", default=None, help="Path to a JSON file merged into the initial state.")
@@ -291,7 +292,7 @@ def _add_cli_flag(parser: argparse.ArgumentParser) -> None:
         choices=WORKER_CLI_CHOICES,
         default=None,
         help=(
-            "Worker CLI for this process (claude, grok, cursor, or grok-orca). "
+            "Worker CLI for this process (claude, grok, cursor, grok-orca, or muse). "
             "Overrides ~/.agents/agentgraph.json. Default: claude."
         ),
     )

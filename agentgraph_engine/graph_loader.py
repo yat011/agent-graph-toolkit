@@ -4,7 +4,7 @@ Both kinds of Graph this toolkit knows about load the same way, via stdlib `impo
 copied into a project's `agent_works/`, and never via `langgraph-cli`/`langgraph.json`:
 
 - **Template graphs**: the two built-in, reusable graphs shipped inside
-  `skills/agentgraph-run-graph/templates/{name}/graph.py` (`feature-kickoff`, `standard-phase`, `standard-task`).
+  `skills/agentgraph-run-graph/templates/{name}/graph.py` (`feature-kickoff`, `standard-phase`).
 - **User graphs**: `Path.home() / ".agents" / "graphs" / {name} / "graph.py"`.
 - **Project graphs**: a graph `agentgraph-define-graph` wrote for one specific plan, at
   `agent_works/graphs/{name}/graph.py`.

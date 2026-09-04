@@ -189,7 +189,7 @@ def implement_requirements(state: StandardPhaseState) -> dict:
     output_path = node_output_path(run_dir, IMPLEMENT_NODE_DIR, attempt)
     record = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
     result = dispatch_with_retry(
-        retry=1,
+        retry=0,
         role="code-writer",
         task_prompt=_implement_prompt(state, attempt, run_dir),
         output_path=output_path,
@@ -276,7 +276,7 @@ def review(state: StandardPhaseState) -> dict:
     output_path = node_output_path(run_dir, REVIEW_NODE_DIR, attempt)
     record: dict = {ATTEMPT_COUNT_KEY: attempt, OUTPUT_PATH_KEY: str(output_path)}
     result = dispatch_with_retry(
-        retry=1,
+        retry=0,
         role="reviewer",
         task_prompt=_review_prompt(state, run_dir),
         output_path=output_path,

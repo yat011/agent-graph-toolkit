@@ -1,12 +1,12 @@
 ---
 name: agentgraph-run-graph
-description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.py written by the agentgraph-define-graph skill, or one of the built-in feature-kickoff/standard-phase/standard-task templates) — starts/resumes/redrives it via the `agentgraph` CLI and reports its terminal state, without driving individual node dispatches yourself.
+description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.py written by the agentgraph-define-graph skill, or one of the built-in feature-kickoff/standard-phase templates) — starts/resumes/redrives it via the `agentgraph` CLI and reports its terminal state, without driving individual node dispatches yourself. Pick standard-phase for a single obvious slice; feature-kickoff only when planner + tech-reviewer are actually needed.
 ---
 
 # agentgraph-run-graph
 
 Executes a graph previously authored by the `agentgraph-define-graph` skill, or one of the two
-built-in template graphs (`feature-kickoff`, `standard-phase`, `standard-task`). All node-by-node mechanics —
+built-in template graphs (`feature-kickoff`, `standard-phase`). All node-by-node mechanics —
 dependency ordering, retries, branch judgment, map fan-out, subgraph recursion, checkpointing —
 are owned by the compiled LangGraph `StateGraph` itself, driven by the `agentgraph` CLI
 (`agentgraph_engine/cli.py`; see `ENGINE-CLI.md` in this same directory for exact command syntax
@@ -25,7 +25,7 @@ the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
   this order: **project** (`agent_works/graphs/{graph-name}/graph.py`) **> user**
   (`~/.agents/graphs/{graph-name}/graph.py`, via `Path.home()`) **> template**
   (`skills/agentgraph-run-graph/templates/{graph-name}/graph.py` — `feature-kickoff`,
-  `standard-phase`, `standard-task`). **None of these is ever copied anywhere** — each loads in place via
+  `standard-phase`). **None of these is ever copied anywhere** — each loads in place via
   `importlib`, exactly where it already lives.
 - Optionally, "start fresh" / "new run" — just call `agentgraph start` again; it always creates a
   new `run_id`, never silently reuses an old one.
@@ -36,6 +36,46 @@ the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
 - Optionally, "resume `{run_path}`" for an author-placed `interrupt()` that expects a resume
   value (hello_graph's checkpoint gate) — `agentgraph resume --run {run_path} [--resume-value
   {value}]`. Production template pauses use `redrive`, not `resume`.
+
+## Pick the graph
+
+Do this **before** `agentgraph start`. Do not default to `feature-kickoff` just because the user
+said "feature-kickoff" / "kickoff". Planner + tech-plan-reviewer are extra Worker sessions; skip
+them when the slice is already obvious. There is no `standard-task` template.
+
+| When | Graph | What you do |
+|---|---|---|
+| Spec exists, or the change is one known pattern (clone Play Ball Toy, delete a sidecar, one file + tests) | `standard-phase` | Write a one-item `--input-json` yourself. Do not dispatch planner or tech-plan-reviewer. |
+| New feature, slices unclear, no spec/plan | `feature-kickoff` | `--spec` if a spec file exists; planner writes phases + additional_test. |
+| User named `feature-kickoff` but the work is one phase | `standard-phase` | Switch, and say so. |
+
+`standard-phase` input-json (merged into initial state). `review` is `always` / `if_substantial` / `never` — use `if_substantial` or `never` for a mechanical slice:
+
+```json
+{
+  "item": {
+    "id": "1",
+    "title": "<short title>",
+    "description": "<what to implement, files, NodeCanvas sequence if any>",
+    "test_cases": ["<scoped test names>"],
+    "test_scope": "<optional testClass/testMethod filter>",
+    "review": "if_substantial",
+    "dependencies": []
+  },
+  "spec_path": "agent_works/specs/<slug>.md",
+  "plan_path": "agent_works/plans/<slug>.md"
+}
+```
+
+Then:
+
+```
+agentgraph start --graph standard-phase --slug {slug} --input-json {path}
+```
+
+`spec_path` / `plan_path` may be omitted if those files do not exist. Do not skip
+`additional_test` when the user asked for a full feature-kickoff; that script is the cheap
+gate. `standard-phase` has no additional_test node — scoped tests are the implementer's job.
 
 ## Starting a run
 
@@ -76,13 +116,14 @@ guess:
 
 ## Halting and pausing
 
-A failing/erroring Worker CLI dispatch is an ordinary technical failure, subject to the node's
-own `retry` count, then `halt_reason: "retries_exhausted"` and a pause (production) or END
+A failing/erroring Worker CLI dispatch is an ordinary technical failure. Production templates
+pass `retry=0`, so the first failure pauses (`halt_reason: "retries_exhausted"`) or ENDs
 (hello_graph). Reasons:
 
-- `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit, or the
-  Worker didn't write its required output file) more times than its `retry` count allows. Redrive
-  the same node; reset `attempt_count`.
+- `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit with no
+  `Result:` line in output.md, or the Worker didn't write the file). Redrive the same node;
+  reset `attempt_count`. Do not auto-redrive. A kill after `output.md` already has `Result:`
+  counts as success.
 - `unmet_dependencies` — a sequential map had remaining items stuck on unresolved `dependencies`
   with nothing ready to progress (a cycle).
 - `manual_requested` — a gate's `Result:` line started with `manual` (or implement `stopped`).

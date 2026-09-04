@@ -15,7 +15,7 @@ loads (CONTEXT.md's "Executor").
 
 `start`, `resume`, and `redrive` each resolve the Worker CLI **once per process**:
 
-1. `--cli claude|grok|cursor|grok-orca` on that command, if present
+1. `--cli claude|grok|cursor|grok-orca|muse` on that command, if present
 2. else `worker_cli` in `~/.agents/agentgraph.json`, if present
 3. else `claude`
 
@@ -32,9 +32,9 @@ The settings file is optional (read if present; `start` does not create it):
 
 ## Commands
 
-### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
+### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca|muse]`
 
-Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-phase`, `standard-task`, a project graph,
+Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-phase`, a project graph,
 or a user graph), loaded dynamically via `agentgraph_engine.graph_loader` (never copied into a
 project). Resolution order is project (`agent_works/graphs/{name}/graph.py`) then user
 (`~/.agents/graphs/{name}/graph.py`, via `Path.home()`) then built-in template
@@ -52,7 +52,7 @@ a graph that doesn't derive them itself).
 Output: `{"run_path": ..., "run_id": ..., "halted": bool, "halt_reason": str|null, "outcome":
 str|null, "interrupted"?: bool, "interrupt_value"?: [...]}`.
 
-### `agentgraph resume --run <run_path> [--resume-value <value>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
+### `agentgraph resume --run <run_path> [--resume-value <value>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca|muse]`
 
 Resumes a Run paused at a LangGraph `interrupt()` call (not a halt — see below), using the same
 `run_path`'s `checkpoints.sqlite`. `--resume-value` becomes the interrupted node's `interrupt()`
@@ -66,7 +66,7 @@ Prints the Run's current checkpointed state: `{"run_path": ..., "next": [...], "
 `next` is the node(s) LangGraph would run on the next `invoke`/`resume` call (empty if the Run
 reached `END`).
 
-### `agentgraph redrive --run <run_path> [--message <text>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
+### `agentgraph redrive --run <run_path> [--message <text>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca|muse]`
 
 Continues a **paused** Run (`interrupt()` at `pause_node` or inside a nested-task wrapper) or
 re-attempts a **halted** hello_graph sink.
@@ -110,7 +110,7 @@ to the previous screen; `q` quits. A timer re-runs discovery and checkpoint read
 
 ## Halting vs pausing
 
-Production templates (`feature-kickoff`, `standard-phase`, `standard-task`) **pause** with `interrupt()` instead of
+Production templates (`feature-kickoff`, `standard-phase`) **pause** with `interrupt()` instead of
 routing to a dead-end terminal. The CLI summary then has `interrupted: true` (and usually
 `halted: true` as well — halt fields record *why* and *where to redrive*). Use `agentgraph redrive`
 to continue. `agentgraph resume --resume-value` is for author-placed interrupts that expect a
@@ -121,9 +121,10 @@ time-travel redrive fallback.
 
 Halt / pause reasons:
 
-- `retries_exhausted` — a node's headless-CLI dispatch failed (non-zero exit, or the worker
-  didn't write its required output file) more times than its `retry` count allows. Redrive target:
-  the failed node; attempt counters **are** reset.
+- `retries_exhausted` — a node's headless-CLI dispatch failed (non-zero exit with no `Result:`
+  line, or the worker didn't write its required output file). Production templates use `retry=0`,
+  so the first technical failure pauses. Redrive target: the failed node; attempt counters
+  **are** reset.
 - `unmet_dependencies` — the sequential map had remaining items still waiting on unfinished
   `dependencies` (a cycle) with nothing ready to dispatch. A missing dependency id is left
   `blocked` rather than pausing the whole map. A **paused** upstream item interrupts the map
@@ -151,7 +152,12 @@ each tool call, but that classifier requires Sonnet-tier and above. A dispatch r
 needed; `Write` is the one tool this dispatch path's contract requires). Grok uses
 `--permission-mode auto` and passes the work order as the value of `-p` / `--single` (Grok does
 not read that prompt from stdin). Cursor uses `--auto-review` (plus `--approve-mcps` and `--trust`, never
-`--force`). `DispatchResult.ok` comes back `False` — an ordinary technical failure, retried/halted
+`--force`). Muse runs `muse exec --json` with the work order as its positional prompt
+(`exec` never reads stdin), the graph tier as `--reasoning-effort` (cheap `low`, sonnet
+`high`, opus `max`), and `--approval-mode never --disable-sandbox --trust-workspace
+`--user-input-auto-resolve` so a headless worker can write files, run shell commands, and
+never block on input; its `run` lifts the JSONL `run_terminal` text into the envelope
+before parsing. `DispatchResult.ok` comes back `False` — an ordinary technical failure, retried/halted
 like any other — if a dispatch's permission mode still blocks the write it needs.
 
 ## Map/fan-out and subgraph composition
