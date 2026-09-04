@@ -1,6 +1,6 @@
-"""Tests for the ported feature-kickoff graph.py: branch/planner/tech-review loop, load_tasks
-env-check branch, sequential map/fan-out over a compiled standard-task subgraph, and the
-Python final-review additional-test runner. Pause paths compile with InMemorySaver.
+"""Tests for the ported feature-kickoff graph.py: branch/planner/tech-review loop, load_phases
+env-check branch, sequential map/fan-out over a compiled standard-phase subgraph, additional_test
+(+ one integration_fix), and the final-reviewer agent. Pause paths compile with InMemorySaver.
 """
 
 from __future__ import annotations
@@ -15,8 +15,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
 from agentgraph_engine.constants import (
+    ADDITIONAL_TEST_NODE,
     ATTEMPT_COUNT_KEY,
-    FINAL_REVIEW_NODE,
+    FINAL_REVIEWER_NODE,
     HALT_MANUAL_REQUESTED,
     HALT_REASON_KEY,
     HALT_REJECT_ATTEMPTS_EXHAUSTED,
@@ -24,9 +25,11 @@ from agentgraph_engine.constants import (
     HALT_UNRECOGNIZED_RESULT,
     HALTED_KEY,
     IMPLEMENT_REQUIREMENTS_NODE,
+    INTEGRATION_FIX_NODE,
     ITEM_KEY,
-    LOAD_TASKS_NODE,
-    MAP_TASK_STATES_KEY,
+    LOAD_PHASES_NODE,
+    MAP_PHASE_STATES_KEY,
+    OUTCOME_BLOCKED,
     OUTCOME_KEY,
     OUTCOME_SUCCESS,
     PLANNER_NODE,
@@ -37,7 +40,7 @@ from agentgraph_engine.constants import (
     RESULT_STOPPED,
     RETURNCODE_KEY,
     RUN_DIR_KEY,
-    RUN_ONE_TASK_NODE,
+    RUN_ONE_PHASE_NODE,
     SPEC_PATH_KEY,
     STANDARD_TASK_SUCCESS_DIR,
     STDERR_KEY,
@@ -101,6 +104,12 @@ def _fake_git(args: list[str]) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(["git", *args], 1, stdout="", stderr="")
     if cmd == "checkout":
         return subprocess.CompletedProcess(["git", *args], 0, stdout="", stderr="")
+    if cmd == "merge-base":
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="abc123\n", stderr="")
+    if cmd == "diff":
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="foo.py\n", stderr="")
+    if cmd == "log":
+        return subprocess.CompletedProcess(["git", *args], 0, stdout="abc123 message\n", stderr="")
     raise AssertionError(f"unexpected git args: {args}")
 
 
@@ -121,6 +130,10 @@ def _seed_additional_test(run_dir: Path) -> Path:
 
 @pytest.fixture
 def build_graph(monkeypatch):
+    monkeypatch.setattr(
+        "agentgraph_engine.review_policy.commit_dirty_tree",
+        lambda message, **kwargs: False,
+    )
     module = load_graph_module(GRAPH_PATH)
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_git", _fake_git)
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", _fake_additional_test)
@@ -162,6 +175,22 @@ def _kickoff_state(run_dir: Path, spec_path: Path) -> dict:
     return {RUN_DIR_KEY: str(run_dir), SPEC_PATH_KEY: str(spec_path)}
 
 
+def _phase(
+    item_id: str,
+    title: str,
+    description: str,
+    dependencies: list | None = None,
+    review: str = "always",
+) -> dict:
+    return {
+        "id": item_id,
+        "title": title,
+        "description": description,
+        "dependencies": list(dependencies or []),
+        "review": review,
+    }
+
+
 def test_accepted_path_env_working_reaches_success(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
@@ -169,12 +198,18 @@ def test_accepted_path_env_working_reaches_success(monkeypatch, build_graph, tmp
 
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
     )
     result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 1
-    assert json.loads((run_dir / "04_load_tasks" / "attempt-1" / "items.json").read_text(encoding="utf-8")) == []
+    assert json.loads((run_dir / "04_load_phases" / "attempt-1" / "items.json").read_text(encoding="utf-8")) == []
     recap = (run_dir / "09_success" / "attempt-1" / "output.md").read_text(encoding="utf-8")
     assert "Result: recap written" in recap
 
@@ -253,8 +288,8 @@ def test_manual_keyword_from_tech_review_pauses_immediately(monkeypatch, build_g
     assert result[PLANNER_NODE][ATTEMPT_COUNT_KEY] == 1
 
 
-def test_env_down_pauses_with_redrive_load_tasks(monkeypatch, build_graph, tmp_path):
-    """04_load_tasks has no reject/loop-back pair: a missing tasks JSON pauses immediately."""
+def test_env_down_pauses_with_redrive_load_phases(monkeypatch, build_graph, tmp_path):
+    """04_load_phases has no reject/loop-back pair: a missing tasks JSON pauses immediately."""
     run_dir = tmp_path / "run"
     specs_dir = tmp_path / "agent_works" / "specs"
     specs_dir.mkdir(parents=True, exist_ok=True)
@@ -263,16 +298,22 @@ def test_env_down_pauses_with_redrive_load_tasks(monkeypatch, build_graph, tmp_p
     _seed_additional_test(run_dir)
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
     )
     result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     _assert_paused(
         result,
         reason=HALT_MANUAL_REQUESTED,
-        redrive=LOAD_TASKS_NODE,
+        redrive=LOAD_PHASES_NODE,
         reset=True,
     )
-    assert result[LOAD_TASKS_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[LOAD_PHASES_NODE][ATTEMPT_COUNT_KEY] == 1
     assert result.get(HALTED_KEY) is True
     assert not (run_dir / "08_needs_manual_review").exists()
 
@@ -282,8 +323,8 @@ def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(
 ):
     run_dir = tmp_path / "run"
     items = [
-        {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
-        {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
+        _phase("t1", "First", "d1"),
+        _phase("t2", "Second", "d2", ["t1"]),
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
@@ -297,20 +338,21 @@ def test_sequential_fan_out_with_dependency_gate_and_final_review_passed(
                 (f"Result: {RESULT_ACCEPT}", True),
                 (f"Result: {RESULT_IMPLEMENTED}", True),
                 (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
             ]
         ),
     )
     result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
-    outcomes = {(s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY) for s in result[MAP_TASK_STATES_KEY]}
+    outcomes = {(s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY) for s in result[MAP_PHASE_STATES_KEY]}
     assert outcomes == {"t1": OUTCOME_SUCCESS, "t2": OUTCOME_SUCCESS}
 
 
 def test_item_one_stopped_interrupts_before_item_two(monkeypatch, build_graph, tmp_path):
     run_dir = tmp_path / "run"
     items = [
-        {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
-        {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
+        _phase("t1", "First", "d1"),
+        _phase("t2", "Second", "d2", ["t1"]),
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
@@ -331,12 +373,12 @@ def test_item_one_stopped_interrupts_before_item_two(monkeypatch, build_graph, t
         redrive=IMPLEMENT_REQUIREMENTS_NODE,
         reset=True,
     )
-    assert payload[INTERRUPT_PARENT_NODE_KEY] == RUN_ONE_TASK_NODE
+    assert payload[INTERRUPT_PARENT_NODE_KEY] == RUN_ONE_PHASE_NODE
     assert payload[INTERRUPT_CHECKPOINT_NS_KEY] == "item-1"
-    item2 = run_dir / "05_run_tasks" / "item-2"
+    item2 = run_dir / "05_run_phases" / "item-2"
     assert not (item2 / "02_implement_requirements").exists()
-    assert FINAL_REVIEW_NODE not in result
-    assert not (run_dir / "06_final_review").exists()
+    assert FINAL_REVIEWER_NODE not in result
+    assert not (run_dir / "06_additional_test").exists()
     assert not (run_dir / "08_needs_manual_review").exists()
 
 
@@ -347,8 +389,8 @@ def test_item_one_redrive_still_stopped_does_not_start_item_two(
     """A nested pause that is still stopped after redrive must interrupt again, not start item-2."""
     run_dir = tmp_path / "run"
     items = [
-        {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
-        {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
+        _phase("t1", "First", "d1"),
+        _phase("t2", "Second", "d2", ["t1"]),
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
@@ -386,12 +428,12 @@ def test_item_one_redrive_still_stopped_does_not_start_item_two(
         redrive=IMPLEMENT_REQUIREMENTS_NODE,
         reset=True,
     )
-    assert payload[INTERRUPT_PARENT_NODE_KEY] == RUN_ONE_TASK_NODE
-    item2 = run_dir / "05_run_tasks" / "item-2"
+    assert payload[INTERRUPT_PARENT_NODE_KEY] == RUN_ONE_PHASE_NODE
+    item2 = run_dir / "05_run_phases" / "item-2"
     assert not item2.exists()
     outcomes = {
         (s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY)
-        for s in (second.get(MAP_TASK_STATES_KEY) or [])
+        for s in (second.get(MAP_PHASE_STATES_KEY) or [])
     }
     assert "t1" not in outcomes or outcomes.get("t1") != OUTCOME_SUCCESS
     assert "t2" not in outcomes
@@ -402,13 +444,13 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(
 ):
     run_dir = tmp_path / "run"
     items = [
-        {"id": "a", "title": "A", "description": "d", "dependencies": []},
-        {"id": "b", "title": "B", "description": "d", "dependencies": []},
+        _phase("a", "A", "d"),
+        _phase("b", "B", "d"),
     ]
     _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
     _seed_additional_test(run_dir)
     item_a_success_path = (
-        run_dir / "05_run_tasks" / "item-1" / STANDARD_TASK_SUCCESS_DIR / "attempt-1" / "output.md"
+        run_dir / "05_run_phases" / "item-1" / STANDARD_TASK_SUCCESS_DIR / "attempt-1" / "output.md"
     )
     seen_a_done_before_b_dispatch = {"value": None}
     script = [
@@ -417,6 +459,7 @@ def test_map_fan_out_is_sequential_item_b_waits_for_item_a_to_finish(
         (f"Result: {RESULT_IMPLEMENTED}", True),
         (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_IMPLEMENTED}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
         (f"Result: {RESULT_ACCEPT}", True),
     ]
     remaining = list(script)
@@ -446,6 +489,7 @@ def test_planner_prompt_asks_for_os_specific_additional_test_script(
     remaining = [
         ("Result: plan written", True),
         (f"Result: {RESULT_ACCEPT}", True),
+        (f"Result: {RESULT_ACCEPT}", True),
     ]
 
     def executor(argv, input_text, timeout):
@@ -461,13 +505,15 @@ def test_planner_prompt_asks_for_os_specific_additional_test_script(
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     nodes = sys.modules[NODES_MODULE]
     script_path = str(nodes._additional_test_script_path(run_dir))
-    planner_text = next(t for t in captured if "Write plan, tasks JSON, and additional-test" in t)
+    planner_text = next(t for t in captured if "Write plan, phases JSON, and additional-test" in t)
     assert "additional_test_script:" in planner_text
     assert script_path in planner_text
     assert nodes._additional_test_script_kind() in planner_text
     assert "never a directory" in planner_text
     assert "repository root as cwd" in planner_text
     assert f"additional_test_script: {script_path}" in planner_text
+    assert "final-reviewer agent" in planner_text
+    assert "do not set review: always merely because" in planner_text.lower()
     review_text = next(t for t in captured if "not spec's own decisions" in t)
     assert script_path in review_text
     expected_name = "additional_test.cmd" if sys.platform == "win32" else "additional_test.sh"
@@ -522,30 +568,79 @@ def test_final_review_runs_script_stores_stderr_and_succeeds(monkeypatch, build_
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
     )
     result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
     assert ran == [script_path]
-    record = result[FINAL_REVIEW_NODE]
+    record = result[ADDITIONAL_TEST_NODE]
     assert record[STDOUT_KEY] == "ok\n"
     assert record[STDERR_KEY] == "warning: unused\n"
     assert record[RETURNCODE_KEY] == 0
     assert record[RESULT_KEY] == RESULT_ACCEPT
-    attempt_dir = run_dir / "06_final_review" / "attempt-1"
+    attempt_dir = run_dir / "06_additional_test" / "attempt-1"
     assert (attempt_dir / "stdout.txt").read_text(encoding="utf-8") == "ok\n"
     assert (attempt_dir / "stderr.txt").read_text(encoding="utf-8") == "warning: unused\n"
     output = (attempt_dir / "output.md").read_text(encoding="utf-8")
     assert "ok" in output
     assert "warning: unused" in output
     assert "Return code: 0" in output
+    assert result[FINAL_REVIEWER_NODE][RESULT_KEY] == RESULT_ACCEPT
 
 
-def test_final_review_nonzero_exit_pauses_and_stores_streams(monkeypatch, build_graph, tmp_path):
+def test_additional_test_fail_one_fix_then_green_reaches_final_reviewer(
+    monkeypatch, build_graph, tmp_path
+):
     run_dir = tmp_path / "run"
     _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
     _seed_additional_test(run_dir)
     tap_stdout = "Cannot find module '...\\\\scripts\\\\test'\n✖ agent_works\\scripts\\test\n"
+    runs = {"n": 0}
+
+    def runner(path: Path) -> subprocess.CompletedProcess:
+        runs["n"] += 1
+        if runs["n"] == 1:
+            return subprocess.CompletedProcess(
+                ["additional_test", str(path)], 1, stdout=tap_stdout, stderr=""
+            )
+        return subprocess.CompletedProcess(
+            ["additional_test", str(path)], 0, stdout="ok\n", stderr=""
+        )
+
+    monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert runs["n"] == 2
+    assert result[INTEGRATION_FIX_NODE][ATTEMPT_COUNT_KEY] == 1
+    first = run_dir / "06_additional_test" / "attempt-1"
+    assert (first / "stdout.txt").read_text(encoding="utf-8") == tap_stdout
+    assert "Cannot find module" in (first / "output.md").read_text(encoding="utf-8")
+    assert result[ADDITIONAL_TEST_NODE][ATTEMPT_COUNT_KEY] == 2
+    assert result[FINAL_REVIEWER_NODE][RESULT_KEY] == RESULT_ACCEPT
+
+
+def test_additional_test_fail_after_one_fix_pauses(monkeypatch, build_graph, tmp_path):
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    _seed_additional_test(run_dir)
+    tap_stdout = "still failing\n"
 
     def runner(path: Path) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(
@@ -555,26 +650,210 @@ def test_final_review_nonzero_exit_pauses_and_stores_streams(monkeypatch, build_
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
     monkeypatch.setattr(
         "agentgraph_engine.dispatch._run_subprocess",
-        _script_executor([("Result: plan written", True), (f"Result: {RESULT_ACCEPT}", True)]),
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_REJECT_ATTEMPTS_EXHAUSTED,
+        redrive=INTEGRATION_FIX_NODE,
+        reset=True,
+    )
+    assert result[INTEGRATION_FIX_NODE][ATTEMPT_COUNT_KEY] == 1
+    assert result[ADDITIONAL_TEST_NODE][ATTEMPT_COUNT_KEY] == 2
+    assert "additional tests failed (exit 1)" in (result[ADDITIONAL_TEST_NODE][RESULT_KEY] or "")
+
+
+def test_final_reviewer_reject_pauses_without_integration_fix(
+    monkeypatch, build_graph, tmp_path
+):
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    _seed_additional_test(run_dir)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_REJECT} — seam broken", True),
+            ]
+        ),
     )
     result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
     _assert_paused(
         result,
         reason=HALT_MANUAL_REQUESTED,
-        redrive=FINAL_REVIEW_NODE,
+        redrive=FINAL_REVIEWER_NODE,
         reset=True,
     )
-    record = result[FINAL_REVIEW_NODE]
-    assert record[STDOUT_KEY] == tap_stdout
-    assert record[STDERR_KEY] == ""
-    assert record[RETURNCODE_KEY] == 1
-    assert "additional tests failed (exit 1)" in (record[RESULT_KEY] or "")
-    attempt_dir = run_dir / "06_final_review" / "attempt-1"
-    assert (attempt_dir / "stdout.txt").read_text(encoding="utf-8") == tap_stdout
-    assert (attempt_dir / "stderr.txt").read_text(encoding="utf-8") == ""
-    output = (attempt_dir / "output.md").read_text(encoding="utf-8")
-    assert "Cannot find module" in output
-    assert not (run_dir / "08_needs_manual_review").exists()
+    assert INTEGRATION_FIX_NODE not in result or not (
+        result.get(INTEGRATION_FIX_NODE) or {}
+    ).get(ATTEMPT_COUNT_KEY)
+    assert result[FINAL_REVIEWER_NODE][ATTEMPT_COUNT_KEY] == 1
+
+
+def _assert_no_integration_fix(result) -> None:
+    fix = result.get(INTEGRATION_FIX_NODE) or {}
+    assert not fix.get(ATTEMPT_COUNT_KEY)
+    reviewer = result.get(FINAL_REVIEWER_NODE) or {}
+    assert not reviewer.get(ATTEMPT_COUNT_KEY)
+
+
+def test_additional_test_missing_script_pauses_without_fix(monkeypatch, build_graph, tmp_path):
+    """Tech-plan-reviewer requires the script; additional_test must still pause if it vanished after."""
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    seeded = _seed_additional_test(run_dir)
+    nodes = sys.modules[NODES_MODULE]
+    real_path = nodes._additional_test_script_path
+    ran = {"n": 0}
+
+    def path_for(rd: Path) -> Path:
+        if (rd / "04_load_phases").exists():
+            return rd / "missing_additional_test.cmd"
+        return real_path(rd)
+
+    def runner(path: Path) -> subprocess.CompletedProcess:
+        ran["n"] += 1
+        raise AssertionError("suite must not run when the script file is missing")
+
+    monkeypatch.setattr(nodes, "_additional_test_script_path", path_for)
+    monkeypatch.setattr(nodes, "_run_additional_test", runner)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=ADDITIONAL_TEST_NODE,
+        reset=True,
+    )
+    _assert_no_integration_fix(result)
+    assert ran["n"] == 0
+    assert "additional_test script missing" in (result[ADDITIONAL_TEST_NODE][RESULT_KEY] or "")
+    assert seeded.is_file()
+
+
+def test_additional_test_incomplete_phases_pauses_without_fix(
+    monkeypatch, build_graph, tmp_path
+):
+    run_dir = tmp_path / "run"
+    items = [_phase("t1", "Blocked", "d1", ["no-such-phase"])]
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
+    _seed_additional_test(run_dir)
+    ran = {"n": 0}
+
+    def runner(path: Path) -> subprocess.CompletedProcess:
+        ran["n"] += 1
+        raise AssertionError("suite must not run when phases are incomplete")
+
+    monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=ADDITIONAL_TEST_NODE,
+        reset=True,
+    )
+    _assert_no_integration_fix(result)
+    assert ran["n"] == 0
+    assert "incomplete phases: t1 (blocked)" in (result[ADDITIONAL_TEST_NODE][RESULT_KEY] or "")
+    outcomes = {
+        (s.get(ITEM_KEY) or {}).get("id"): s.get(OUTCOME_KEY)
+        for s in result[MAP_PHASE_STATES_KEY]
+    }
+    assert outcomes == {"t1": OUTCOME_BLOCKED}
+
+
+def test_additional_test_launch_file_not_found_pauses_without_fix(
+    monkeypatch, build_graph, tmp_path
+):
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    _seed_additional_test(run_dir)
+
+    def runner(path: Path) -> subprocess.CompletedProcess:
+        raise FileNotFoundError("launcher missing")
+
+    monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", runner)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    _assert_paused(
+        result,
+        reason=HALT_MANUAL_REQUESTED,
+        redrive=ADDITIONAL_TEST_NODE,
+        reset=True,
+    )
+    _assert_no_integration_fix(result)
+    record = result[ADDITIONAL_TEST_NODE]
+    assert record[RETURNCODE_KEY] == 127
+    assert "failed to launch additional_test script" in (record[RESULT_KEY] or "")
+    assert "launcher missing" in (record[STDERR_KEY] or "")
+
+
+def test_final_reviewer_prompt_lists_handoffs_not_reviewer_corpus(
+    monkeypatch, build_graph, tmp_path
+):
+    load_graph_module(GRAPH_PATH)
+    nodes = sys.modules[NODES_MODULE]
+    run_dir = tmp_path / "run"
+    item_dir = run_dir / "05_run_phases" / "item-1"
+    item_dir.mkdir(parents=True)
+    handoff = item_dir / "handoff.md"
+    handoff.write_text("## Decisions\n- keep names\n", encoding="utf-8")
+    spec = tmp_path / "spec.md"
+    spec.write_text("# spec\n", encoding="utf-8")
+    state = {
+        RUN_DIR_KEY: str(run_dir),
+        SPEC_PATH_KEY: str(spec),
+        MAP_PHASE_STATES_KEY: [
+            {
+                ITEM_KEY: {"id": "1", "title": "Core"},
+                OUTCOME_KEY: OUTCOME_SUCCESS,
+                RUN_DIR_KEY: str(item_dir),
+                "review_node": {ATTEMPT_COUNT_KEY: 1},
+            }
+        ],
+        ADDITIONAL_TEST_NODE: {STDOUT_KEY: "12 passed\n", RETURNCODE_KEY: 0, STDERR_KEY: ""},
+    }
+    text = nodes._final_reviewer_prompt(state)
+    assert str(handoff) in text
+    assert "12 passed" in text
+    assert "Do not open phase implementer output.md" in text
+    assert "Do not re-run the unfiltered suite" in text
+    assert "phase-reviewed" in text
+    assert "abc123" in text
 
 
 def test_additional_test_argv_is_os_specific():
@@ -589,3 +868,31 @@ def test_additional_test_argv_is_os_specific():
         assert argv[0] in {"bash", "sh"} or argv[0].endswith(("bash", "sh"))
         assert str(script) in argv
         assert script.name == "additional_test.sh"
+
+
+def test_review_never_phase_skips_nested_reviewer(monkeypatch, build_graph, tmp_path):
+    run_dir = tmp_path / "run"
+    items = [
+        _phase("t1", "First", "d1", review="always"),
+        _phase("t2", "Second", "d2", ["t1"], review="never"),
+    ]
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, items)
+    _seed_additional_test(run_dir)
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert (run_dir / "05_run_phases" / "item-2" / "03_skip_review_commit").exists()
+    assert not (run_dir / "05_run_phases" / "item-2" / "03_review").exists()
+    assert (run_dir / "05_run_phases" / "item-1" / "03_review").exists()

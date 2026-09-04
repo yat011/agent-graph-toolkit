@@ -1,7 +1,7 @@
 """Shared graph.py resolution for one Run: derive its `--agent-works-root` from `run_dir` and
 compile a named graph against a checkpointer. Used both for a Run's own graph (status, topology)
-and for a nested child thread's graph, which is always `standard-task` regardless of the parent's
-`graph_name` (`nodes.py:645-680` dispatches every child as a standard-task Run).
+and for a nested child thread's graph, which is always `standard-phase` regardless of the parent's
+`graph_name` (`feature-kickoff` dispatches every child as a standard-phase Run).
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from pathlib import Path
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module, resolve_graph_path
 from agentgraph_engine.monitor.discovery import DiscoveredRun
 
-CHILD_GRAPH_NAME = "standard-task"
+CHILD_GRAPH_NAME = "standard-phase"
 
 
 def agent_works_root_for(run: DiscoveredRun) -> Path:

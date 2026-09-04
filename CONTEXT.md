@@ -40,7 +40,7 @@ with its own checkpoint database and folder under `agent_works/{graph_name}/runs
 
 **Template graph**:
 One of the built-in, reusable Graphs shipped inside a skill's own `templates/{name}/graph.py`
-(currently `feature-kickoff`, `standard-task`). Loaded dynamically by name at run time — never
+(currently `feature-kickoff`, `standard-phase`, `standard-task`). Loaded dynamically by name at run time — never
 copied into a project.
 
 **Coordinating agent**:

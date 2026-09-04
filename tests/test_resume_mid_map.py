@@ -3,7 +3,7 @@
 Regression for a real bug found while running feature-kickoff on the agentgraph-monitor spec:
 `cmd_resume` called `compiled.update_state(config, {"worker_cli": ...})` as its own standalone
 step, then `compiled.invoke(None, config)`. When the Run's pending next node was reached via a
-dynamic `Command(goto=...)` push (as `pick_next_task` -> `run_one_task` uses, not a static
+dynamic `Command(goto=...)` push (as `pick_next_phase` -> `run_one_phase` uses, not a static
 `add_conditional_edges` wiring), that intermediate update_state() checkpoint silently dropped the
 pending push task. `invoke(None)` then found nothing left to do and returned immediately, with
 `outcome` never set — the Run looked "finished" (`next: []`) while later map items and the final
@@ -29,7 +29,7 @@ from agentgraph_engine.constants import (
     OUTCOME_SUCCESS,
     RESULT_ACCEPT,
     RESULT_IMPLEMENTED,
-    RUN_ONE_TASK_NODE,
+    RUN_ONE_PHASE_NODE,
 )
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 from agentgraph_engine.runs import open_checkpointer, run_dir_for, thread_config
@@ -48,8 +48,8 @@ from tests.test_feature_kickoff_graph import (
 
 def _two_dependent_items() -> list[dict]:
     return [
-        {"id": "t1", "title": "First", "description": "d1", "dependencies": []},
-        {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"]},
+        {"id": "t1", "title": "First", "description": "d1", "dependencies": [], "review": "always"},
+        {"id": "t2", "title": "Second", "description": "d2", "dependencies": ["t1"], "review": "always"},
     ]
 
 
@@ -57,6 +57,10 @@ def _patch_kickoff_nodes(monkeypatch) -> None:
     load_graph_module(GRAPH_PATH)
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_git", _fake_git)
     monkeypatch.setattr(sys.modules[NODES_MODULE], "_run_additional_test", _fake_additional_test)
+    monkeypatch.setattr(
+        "agentgraph_engine.review_policy.commit_dirty_tree",
+        lambda message, **kwargs: False,
+    )
 
 
 def _kickoff_build_graph():
@@ -108,17 +112,17 @@ def test_resume_after_mid_map_process_restart_runs_remaining_item(
         first = compiled1.invoke(
             _kickoff_state(run_dir, spec_path),
             config=config,
-            interrupt_before=[RUN_ONE_TASK_NODE],
+            interrupt_before=[RUN_ONE_PHASE_NODE],
         )
         assert "__interrupt__" not in first
-        second = compiled1.invoke(None, config=config, interrupt_before=[RUN_ONE_TASK_NODE])
+        second = compiled1.invoke(None, config=config, interrupt_before=[RUN_ONE_PHASE_NODE])
         assert "__interrupt__" not in second
         snap = compiled1.get_state(config)
-        assert snap.next == (RUN_ONE_TASK_NODE,)
+        assert snap.next == (RUN_ONE_PHASE_NODE,)
         assert snap.values.get(OUTCOME_KEY) is None
 
-    assert (run_dir / "05_run_tasks" / "item-1" / "04_success").exists()
-    assert not (run_dir / "05_run_tasks" / "item-2").exists()
+    assert (run_dir / "05_run_phases" / "item-1" / "04_success").exists()
+    assert not (run_dir / "05_run_phases" / "item-2").exists()
 
     # --- Pass 2 (process #2, new SqliteSaver): the real `agentgraph resume --cli claude`
     # call, exactly as a Coordinating agent would issue after a killed process. ---
@@ -127,6 +131,7 @@ def test_resume_after_mid_map_process_restart_runs_remaining_item(
         _script_executor(
             [
                 (f"Result: {RESULT_IMPLEMENTED}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
                 (f"Result: {RESULT_ACCEPT}", True),
             ]
         ),
@@ -139,7 +144,7 @@ def test_resume_after_mid_map_process_restart_runs_remaining_item(
         "halted=False/outcome=None dead end"
     )
 
-    assert (run_dir / "05_run_tasks" / "item-2" / "04_success").exists(), (
+    assert (run_dir / "05_run_phases" / "item-2" / "04_success").exists(), (
         "item t2's pending run_one_task_node dispatch must not be silently dropped by resume"
     )
 

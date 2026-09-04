@@ -171,7 +171,7 @@ def pause_payload(state: dict, *, extra: Optional[dict] = None) -> dict:
 def goto_after_pause(payload: dict) -> str:
     """`Command(goto=redrive_node)` only when that node lives on this graph.
 
-    Nested map pauses stash `parent_node` (run_one_task_node) plus a child `redrive_node`
+    Nested map pauses stash `parent_node` (run_one_phase_node) plus a child `redrive_node`
     that exists only on the child graph. The parent must re-enter `parent_node`; the child
     pause still jumps to `redrive_node` because its payload has no `parent_node`.
     """

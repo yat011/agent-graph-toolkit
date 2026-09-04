@@ -54,7 +54,13 @@ def test_classify_gate_reject_loops_back_under_budget():
     assert classify_gate(state, REVIEW_GATE, REVIEW_NODE) == {ROUTE_KEY: LOOP_BACK}
 
 
-def test_classify_gate_reject_exhausted_goes_manual():
+def test_classify_gate_reject_without_retry_target_is_manual():
+    gate = GateConfig()
+    state = {REVIEW_NODE: {RESULT_KEY: "rejected — seam broken"}}
+    assert classify_gate(state, gate, REVIEW_NODE) == {
+        ROUTE_KEY: MANUAL,
+        HALT_REASON_KEY: HALT_MANUAL_REQUESTED,
+    }
     state = {
         REVIEW_NODE: {RESULT_KEY: "rejected — still bad"},
         IMPLEMENT_REQUIREMENTS_NODE: {ATTEMPT_COUNT_KEY: 3},

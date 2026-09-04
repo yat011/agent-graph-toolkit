@@ -284,9 +284,10 @@ def test_dispatch_worker_fails_before_subprocess_when_named_role_missing(tmp_pat
     assert calls == []
 
 
-def test_preflight_feature_kickoff_and_standard_task_pass_with_repo_agents():
+def test_preflight_feature_kickoff_and_nested_templates_pass_with_repo_agents():
     preflight_role_prompts(TEMPLATES_ROOT / "feature-kickoff" / "graph.py")
     preflight_role_prompts(TEMPLATES_ROOT / "standard-task" / "graph.py")
+    preflight_role_prompts(TEMPLATES_ROOT / "standard-phase" / "graph.py")
 
 
 def test_required_roles_skip_general_purpose_and_researcher_unless_dispatched():
@@ -294,17 +295,22 @@ def test_required_roles_skip_general_purpose_and_researcher_unless_dispatched():
     assert "code-writer" in standard
     assert "reviewer" in standard
     assert "general-purpose" not in standard
+    phase = required_roles_from_graph_path(TEMPLATES_ROOT / "standard-phase" / "graph.py")
+    assert "code-writer" in phase
+    assert "reviewer" in phase
+    assert "general-purpose" not in phase
     kickoff = required_roles_from_graph_path(TEMPLATES_ROOT / "feature-kickoff" / "graph.py")
     assert "planner" in kickoff
     assert "tech-plan-reviewer" in kickoff
     assert "code-writer" in kickoff
     assert "reviewer" in kickoff
+    assert "final-reviewer" in kickoff
     assert "researcher" not in kickoff
     assert "general-purpose" not in kickoff
 
 
 def test_template_nodes_have_no_triple_quoted_fstrings():
-    for name in ("feature-kickoff", "standard-task"):
+    for name in ("feature-kickoff", "standard-task", "standard-phase"):
         text = (TEMPLATES_ROOT / name / "nodes.py").read_text(encoding="utf-8")
         assert 'f"""' not in text
         assert "f'''" not in text

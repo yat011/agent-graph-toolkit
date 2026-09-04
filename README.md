@@ -34,17 +34,20 @@ template (loaded dynamically from `skills/agentgraph-run-graph/templates/feature
 
 ```
 create_feature_branch -> planner -> tech_plan_reviewer
-                                     |-[accepted]-------------------------------> load_tasks
+                                     |-[accepted]-------------------------------> load_phases
                                      |-[rejected, attempted < 3 times]----------> planner  (loop back)
                                      |-[reject×3]-------------------------------> pause (redrive planner, reset)
                                      `-[manual / unrecognized]------------------> pause (redrive reviewer, reset)
 
-load_tasks
- |-[accepted, env working]-> pick_next_task <-> run_one_task (compiled standard-task, per-item thread)
- |                              `-[all items done]--------------------------------> final_review
- |                                                                                    |-[accepted]------------> success
- |                                                                                    `-[manual/fail]---------> pause (redrive final_review)
- `-[manual, env down]---------------------------------------------------------------> pause (redrive load_tasks)
+load_phases
+ |-[accepted, env working]-> pick_next_phase <-> run_one_phase (compiled standard-phase, per-item thread)
+ |                              `-[all items done]--------------------------------> additional_test
+ |                                                                                    |-[accepted]------------> final_reviewer ----> success
+ |                                                                                    |-[rejected, fix unused]-> integration_fix -> additional_test
+ |                                                                                    |-[rejected, fix used]--> pause (redrive integration_fix)
+ |                                                                                    `-[manual]--------------> pause (redrive additional_test)
+ |                                                                                  final_reviewer reject/manual -> pause (redrive final_reviewer)
+ `-[manual, env down]---------------------------------------------------------------> pause (redrive load_phases)
 ```
 
 A custom graph is two skill invocations:
@@ -75,18 +78,22 @@ skills/
   agentgraph-define-graph/              # plan -> graph.py
   agentgraph-run-graph/                 # run a graph.py via the `agentgraph` CLI
     ENGINE-CLI.md                      # the `agentgraph` CLI's command contract
-    templates/feature-kickoff/graph.py  # spec -> plan -> per-task implement/review -> additional tests
-    templates/standard-task/graph.py    # per-task subgraph used by feature-kickoff
-  agentgraph-vertical-slice-tasks/      # how to size a plan's tasks
+    templates/feature-kickoff/graph.py  # spec -> plan -> per-phase implement / conditional review
+                                        # then additional_test (+ one integration_fix) then final-reviewer
+    templates/standard-phase/graph.py   # per-phase subgraph used by feature-kickoff
+    templates/standard-task/graph.py    # standalone always-review subgraph (single-bug / chore)
+  agentgraph-phase-sizing/              # how to size kickoff phases (sequential, context-window)
+  agentgraph-vertical-slice-tasks/      # standalone standard-task sizing; not for kickoff
   agentgraph-code-review-standards/     # Standards vs Spec review
   agentgraph-test-quality-bar/
   agentgraph-research-primary-sources/
 agents/
-  planner.md               # plan + tasks (spec only if the invocation asks)
+  planner.md               # plan + phases (spec only if the invocation asks)
   tech-plan-reviewer.md
   researcher.md
   code-writer.md
   reviewer.md
+  final-reviewer.md        # e2e / integration gate after additional_test is green
 tests/                       # pytest — dispatch, graph loading, both ported graphs, checkpoint resume
 ```
 

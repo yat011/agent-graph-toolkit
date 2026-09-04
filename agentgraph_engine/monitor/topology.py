@@ -1,6 +1,6 @@
 """Per-Run ASCII topology: `compiled.get_graph().draw_ascii()` with the row's current node
 highlighted. One diagram per Run instance — never a shared fleet-wide diagram. Child drill-in
-passes the child's own compiled graph (standard-task, for `{run_id}:item-*` threads), not the
+passes the child's own compiled graph (standard-phase, for `{run_id}:item-*` threads), not the
 parent's.
 """
 

@@ -112,7 +112,7 @@ def build_graph(checkpointer=None):
 
 
 def _write_child_graph(agent_works_root: Path) -> Path:
-    graph_py = agent_works_root / "graphs" / "standard-task" / "graph.py"
+    graph_py = agent_works_root / "graphs" / "standard-phase" / "graph.py"
     graph_py.parent.mkdir(parents=True, exist_ok=True)
     graph_py.write_text(CHILD_GRAPH_PY, encoding="utf-8")
     return graph_py

@@ -123,8 +123,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         config = {**thread_config(run_id), "recursion_limit": args.recursion_limit}
         # The worker_cli update must ride along with the same invoke() call — a standalone
         # update_state() before invoke(None) creates an intermediate checkpoint that silently
-        # drops a pending Command(goto=...)-pushed task (e.g. mid-map pick_next_task ->
-        # run_one_task), leaving the run falsely looking finished. See ADR/bug notes.
+        # drops a pending Command(goto=...)-pushed task (e.g. mid-map pick_next_phase ->
+        # run_one_phase), leaving the run falsely looking finished. See ADR/bug notes.
         update = {WORKER_CLI_KEY: worker_cli}
         if args.resume_value is not None:
             resume_input = Command(resume=args.resume_value, update=update)
@@ -246,7 +246,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_start = sub.add_parser("start", help="Start a fresh Run of a named template graph.")
-    p_start.add_argument("--graph", required=True, help="Template graph name (feature-kickoff, standard-task, ...).")
+    p_start.add_argument("--graph", required=True, help="Template graph name (feature-kickoff, standard-phase, standard-task, ...).")
     p_start.add_argument("--slug", default=None, help="Short kebab-case slug for the run folder name.")
     p_start.add_argument("--spec", default=None, help="Path to the input spec (feature-kickoff).")
     p_start.add_argument("--input-json", default=None, help="Path to a JSON file merged into the initial state.")

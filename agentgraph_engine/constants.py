@@ -46,7 +46,10 @@ RUN_DIR_KEY = "run_dir"
 ITEM_KEY = "item"
 ITEMS_KEY = "items"
 SPEC_PATH_KEY = "spec_path"
-MAP_TASK_STATES_KEY = "map_task_states"
+PLAN_PATH_KEY = "plan_path"
+PREVIOUS_HANDOFF_PATH_KEY = "previous_handoff_path"
+REVIEW_LINE_THRESHOLD_KEY = "review_line_threshold"
+MAP_PHASE_STATES_KEY = "map_phase_states"
 WORKER_CLI_KEY = "worker_cli"
 USAGE_KEY = "usage"
 STDERR_KEY = "stderr"
@@ -68,32 +71,43 @@ WORKER_CLI_IDENTITIES = frozenset(
 )
 WORKER_CLI_CURSOR_BINARY = "cursor-agent"
 
-# On-disk attempt-folder names for a nested standard-task run.
+# On-disk attempt-folder names for a nested standard-task / standard-phase run.
 STANDARD_TASK_SUCCESS_DIR = "04_success"
+HANDOFF_FILENAME = "handoff.md"
+
+# Phase review policy (planner-emitted `review` field on each phase JSON object).
+REVIEW_POLICY_ALWAYS = "always"
+REVIEW_POLICY_IF_SUBSTANTIAL = "if_substantial"
+REVIEW_POLICY_NEVER = "never"
+DEFAULT_REVIEW_LINE_THRESHOLD = 80
 
 # Business vocabulary — Result: phrases used identically by every gate in both templates.
 RESULT_ACCEPT = "accepted"
 RESULT_REJECT = "rejected"
 RESULT_MANUAL = "manual"
 
-# Business vocabulary — implement_requirements Result: phrases (standard-task).
+# Business vocabulary — implement_requirements Result: phrases (standard-task / standard-phase).
 RESULT_IMPLEMENTED = "implemented"
 RESULT_STOPPED = "stopped"
+RESULT_COMMITTED = "committed"
 
 # Business vocabulary — graph outcome values (not node ids).
 OUTCOME_SUCCESS = "success"
 OUTCOME_BLOCKED = "blocked"
 
-# standard-task production node ids.
+# standard-task / standard-phase production node ids.
 IMPLEMENT_REQUIREMENTS_NODE = "implement_requirements_node"
 REVIEW_NODE = "review_node"
+SKIP_REVIEW_COMMIT_NODE = "skip_review_commit_node"
 SUCCESS_NODE = "success_node"
 
 # feature-kickoff production node ids.
 CREATE_FEATURE_BRANCH_NODE = "create_feature_branch_node"
 PLANNER_NODE = "planner_node"
 TECH_PLAN_REVIEWER_NODE = "tech_plan_reviewer_node"
-LOAD_TASKS_NODE = "load_tasks_node"
-PICK_NEXT_TASK_NODE = "pick_next_task_node"
-RUN_ONE_TASK_NODE = "run_one_task_node"
-FINAL_REVIEW_NODE = "final_review_node"
+LOAD_PHASES_NODE = "load_phases_node"
+PICK_NEXT_PHASE_NODE = "pick_next_phase_node"
+RUN_ONE_PHASE_NODE = "run_one_phase_node"
+ADDITIONAL_TEST_NODE = "additional_test_node"
+INTEGRATION_FIX_NODE = "integration_fix_node"
+FINAL_REVIEWER_NODE = "final_reviewer_node"

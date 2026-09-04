@@ -8,12 +8,14 @@ function — no side effects, no re-classification.
 Classification, in order (keyword match is case-insensitive via matches_result_keyword):
   1. Result: line starts with RESULT_ACCEPT -> ACCEPT
   2. Result: line starts with RESULT_MANUAL -> MANUAL (halt_reason: manual_requested)
-  3. Result: line starts with RESULT_REJECT and retry_target is set ->
-       - retry_target's attempt_count already at/over max_retry_attempts -> MANUAL
+  3. Result: line starts with RESULT_REJECT ->
+       - retry_target is set and retry_target's attempt_count is under max_retry_attempts
+         -> LOOP_BACK
+       - retry_target is set and attempt_count is at/over max_retry_attempts -> MANUAL
          (halt_reason: reject_attempts_exhausted)
-       - otherwise -> LOOP_BACK
-  4. Anything else (garbled/missing/unrecognized, or reject with no retry_target) -> MANUAL
-     immediately (halt_reason: unrecognized_result). No retry hop.
+       - retry_target is unset -> MANUAL (halt_reason: manual_requested)
+  4. Anything else (garbled/missing/unrecognized) -> MANUAL immediately
+     (halt_reason: unrecognized_result). No retry hop.
 
 Budget checks read `state[retry_target][ATTEMPT_COUNT_KEY]`. Route and halt_reason live on the
 gate's own record (`state[self_node][ROUTE_KEY]`, `state[self_node][HALT_REASON_KEY]`).
@@ -83,11 +85,13 @@ def classify_gate(state: dict, config: GateConfig, self_node: str) -> dict:
     if matches_result_keyword(line, RESULT_MANUAL):
         return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_MANUAL_REQUESTED}
 
-    if config.retry_target is not None and matches_result_keyword(line, RESULT_REJECT):
-        attempts = _record(state, config.retry_target).get(ATTEMPT_COUNT_KEY, 0)
-        if config.max_retry_attempts is not None and attempts >= config.max_retry_attempts:
-            return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_REJECT_ATTEMPTS_EXHAUSTED}
-        return {ROUTE_KEY: LOOP_BACK}
+    if matches_result_keyword(line, RESULT_REJECT):
+        if config.retry_target is not None:
+            attempts = _record(state, config.retry_target).get(ATTEMPT_COUNT_KEY, 0)
+            if config.max_retry_attempts is not None and attempts >= config.max_retry_attempts:
+                return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_REJECT_ATTEMPTS_EXHAUSTED}
+            return {ROUTE_KEY: LOOP_BACK}
+        return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_MANUAL_REQUESTED}
 
     return {ROUTE_KEY: MANUAL, HALT_REASON_KEY: HALT_UNRECOGNIZED_RESULT}
 

@@ -22,11 +22,13 @@ Before doing anything else, read `CONTEXT.md` (repo root) for this toolkit's glo
 Node, Worker, Executor, Run, Template graph) and `agentgraph_engine/dispatch.py`'s module
 docstring for the exact `dispatch_worker`/`dispatch_with_retry` signatures this skill's generated
 code must call — do not re-derive or duplicate either from memory. Reading the two shipped
-templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-task}/`) is
+templates (`skills/agentgraph-run-graph/templates/{feature-kickoff,standard-phase,standard-task}/`) is
 the fastest way to see the idiom this skill must reproduce: composed per-node `TypedDict` records
 from `agentgraph_engine.states`, one explicit node function per unit of work (in that template's
 `nodes.py`), a router function per branching node, `build_graph(checkpointer=None)` compiling
 and returning the graph. `graph.py` is wiring only — no node bodies or prompt-builders.
+Kickoff-style graphs size work with `agentgraph-phase-sizing` (sequential context-window phases,
+not parallel tickets).
 
 ## Steps
 
@@ -82,7 +84,7 @@ cover the work end to end. For each unit of work, decide:
   - **Map/fan-out node** — a node function that loops **sequentially** (no concurrent dispatch,
     per this migration's settled design) over a list already present in state (produced by an
     earlier node), dispatching or recursing once per item. Honor an item's own `dependencies`
-    list (other item ids) the same way `feature-kickoff/graph.py`'s `pick_next_task` does: skip an
+    list (other item ids) the same way `feature-kickoff/graph.py`'s `pick_next_phase` does: skip an
     item until every listed dependency has reached a success terminal; leave an item permanently
     blocked (never dispatched) if a dependency id is missing; if a nested item **pauses**,
     `interrupt()` immediately so later items do not keep running; pause with
@@ -93,7 +95,7 @@ cover the work end to end. For each unit of work, decide:
     (feature-kickoff uses `{parent_thread}:{item-n}`). If the child `interrupt()`s, the wrapper
     must `interrupt()` too — do not swallow `__interrupt__` and continue the map. Never
     `.invoke()` a compiled subgraph without a checkpointer if that subgraph can pause. See
-    `feature-kickoff/graph.py`'s `pick_next_task` / `run_one_task`.
+    `feature-kickoff/graph.py`'s `pick_next_phase` / `run_one_phase`.
 - **Branches** — add a router function (`def route_after_x(state) -> str`) wherever the plan
   implies a decision point. Every node a router reads from must have its dispatch prompt instruct
   the subagent to end its output with a single-line `Result: <short phrase>` conclusion

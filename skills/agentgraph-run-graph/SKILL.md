@@ -1,12 +1,12 @@
 ---
 name: agentgraph-run-graph
-description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.py written by the agentgraph-define-graph skill, or one of the built-in feature-kickoff/standard-task templates) — starts/resumes/redrives it via the `agentgraph` CLI and reports its terminal state, without driving individual node dispatches yourself.
+description: Use when the user asks to run, execute, resume, or continue a previously-defined agent graph (a graph.py written by the agentgraph-define-graph skill, or one of the built-in feature-kickoff/standard-phase/standard-task templates) — starts/resumes/redrives it via the `agentgraph` CLI and reports its terminal state, without driving individual node dispatches yourself.
 ---
 
 # agentgraph-run-graph
 
 Executes a graph previously authored by the `agentgraph-define-graph` skill, or one of the two
-built-in template graphs (`feature-kickoff`, `standard-task`). All node-by-node mechanics —
+built-in template graphs (`feature-kickoff`, `standard-phase`, `standard-task`). All node-by-node mechanics —
 dependency ordering, retries, branch judgment, map fan-out, subgraph recursion, checkpointing —
 are owned by the compiled LangGraph `StateGraph` itself, driven by the `agentgraph` CLI
 (`agentgraph_engine/cli.py`; see `ENGINE-CLI.md` in this same directory for exact command syntax
@@ -25,7 +25,7 @@ the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
   this order: **project** (`agent_works/graphs/{graph-name}/graph.py`) **> user**
   (`~/.agents/graphs/{graph-name}/graph.py`, via `Path.home()`) **> template**
   (`skills/agentgraph-run-graph/templates/{graph-name}/graph.py` — `feature-kickoff`,
-  `standard-task`). **None of these is ever copied anywhere** — each loads in place via
+  `standard-phase`, `standard-task`). **None of these is ever copied anywhere** — each loads in place via
   `importlib`, exactly where it already lives.
 - Optionally, "start fresh" / "new run" — just call `agentgraph start` again; it always creates a
   new `run_id`, never silently reuses an old one.
@@ -98,11 +98,14 @@ always creates a fresh run. Use `redrive` explicitly.
 
 ## Map items and cross-item dependencies
 
-A map/fan-out (feature-kickoff's `pick_next_task` / `run_one_task`) dispatches sequentially — no
+A map/fan-out (feature-kickoff's `pick_next_phase` / `run_one_phase`) dispatches sequentially — no
 concurrent dispatch — and honors each item's own `dependencies`. An item doesn't start until every
 listed dependency reached a success terminal. A missing dependency id is left `blocked` rather
-than pausing the whole map. A **paused** nested standard-task (reject budget, `Result: stopped`,
+than pausing the whole map. A **paused** nested standard-phase (reject budget, `Result: stopped`,
 Worker death) interrupts immediately so later items do not keep running. Nested runs share the
 parent checkpointer on a per-item `thread_id`. On-disk idempotency only skips items that already
 wrote a `04_success` receipt. Each item's artifacts land under
-`{run_dir}/05_run_tasks/item-{n}/`.
+`{run_dir}/05_run_phases/item-{n}/`. Review after implement is conditional on the phase `review`
+field (`always` / `if_substantial` / `never`). After all phases, `additional_test` runs the
+planner's unfiltered script (one `integration_fix` if it fails); a green suite dispatches the
+`final-reviewer` agent. Reject from that agent pauses — no auto-fix.

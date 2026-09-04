@@ -12,9 +12,9 @@ from agentgraph_engine.constants import (
     HALTED_AT_NODE_KEY,
     HALTED_KEY,
     ITEMS_KEY,
-    LOAD_TASKS_NODE,
+    LOAD_PHASES_NODE,
     OUTCOME_KEY,
-    RUN_ONE_TASK_NODE,
+    RUN_ONE_PHASE_NODE,
 )
 from agentgraph_engine.monitor.checkpointer import open_readonly_checkpointer
 from agentgraph_engine.monitor.discovery import DiscoveredRun
@@ -84,14 +84,14 @@ def classify_status(snapshot: object) -> str:
 
 
 def current_node_label(snapshot: object) -> str | None:
-    """First `next` element, else `halted_at_node`; item n of m on `run_one_task_node`."""
+    """First `next` element, else `halted_at_node`; item n of m on `run_one_phase_node`."""
     nxt = getattr(snapshot, "next", None) or ()
     values = getattr(snapshot, "values", None) or {}
     node = nxt[0] if nxt else values.get(HALTED_AT_NODE_KEY)
-    if node != RUN_ONE_TASK_NODE:
+    if node != RUN_ONE_PHASE_NODE:
         return node
     index = values.get(CURRENT_ITEM_INDEX_KEY)
-    items = (values.get(LOAD_TASKS_NODE) or {}).get(ITEMS_KEY) or []
+    items = (values.get(LOAD_PHASES_NODE) or {}).get(ITEMS_KEY) or []
     if index is None or not items:
         return node
     return f"item {index} of {len(items)}"
@@ -113,7 +113,7 @@ def _load_parent_snapshot(run: DiscoveredRun) -> object:
 
 
 def child_snapshot(run: DiscoveredRun, thread_id: str) -> object:
-    """`get_state` for a nested `{run_id}:item-*` thread, via its own standard-task graph."""
+    """`get_state` for a nested `{run_id}:item-*` thread, via its own standard-phase graph."""
     with open_readonly_checkpointer(run["checkpoint_path"]) as saver:
         compiled = compiled_graph_for(run, CHILD_GRAPH_NAME, saver)
         return compiled.get_state(thread_config(thread_id))

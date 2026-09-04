@@ -88,10 +88,10 @@ def test_get_build_graph_raises_when_neither_present(tmp_path):
 
 def test_resolve_template_path_finds_real_repo_templates():
     templates_root = Path(__file__).resolve().parent.parent / "skills" / "agentgraph-run-graph" / "templates"
-    if not (templates_root / "standard-task" / "graph.py").exists():
-        pytest.skip("standard-task/graph.py missing")
-    path = resolve_template_path("standard-task", templates_root)
+    path = resolve_template_path("standard-phase", templates_root)
     assert path.name == "graph.py"
+    path_task = resolve_template_path("standard-task", templates_root)
+    assert path_task.name == "graph.py"
 
 
 def test_resolve_template_path_missing_graph_raises(tmp_path):

@@ -34,7 +34,7 @@ The settings file is optional (read if present; `start` does not create it):
 
 ### `agentgraph start --graph <name> [--slug <slug>] [--spec <path>] [--input-json <path>] [--agent-works-root <path>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca]`
 
-Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-task`, a project graph,
+Starts a brand-new Run of the named graph (`feature-kickoff`, `standard-phase`, `standard-task`, a project graph,
 or a user graph), loaded dynamically via `agentgraph_engine.graph_loader` (never copied into a
 project). Resolution order is project (`agent_works/graphs/{name}/graph.py`) then user
 (`~/.agents/graphs/{name}/graph.py`, via `Path.home()`) then built-in template
@@ -99,7 +99,7 @@ view. The table hides `Completed` Runs by default; `c` toggles them back in. `En
 selected Run's detail view (status, current node, per-node timings from the checkpoint chain,
 ASCII topology with the current node highlighted, and a selectable table of nested children).
 Selecting a child row and pressing `Enter` again drills into that child's *own* status, current
-node, timings, and topology — compiled from the child's own graph (always `standard-task`, per
+node, timings, and topology — compiled from the child's own graph (always `standard-phase`, per
 `nodes.py:645-680`, regardless of the parent's `graph_name`), not the parent's. `Escape` returns
 to the previous screen; `q` quits. A timer re-runs discovery and checkpoint reads every
 `--interval` seconds (default `3`; non-positive values are rejected before the TUI starts).
@@ -110,7 +110,7 @@ to the previous screen; `q` quits. A timer re-runs discovery and checkpoint read
 
 ## Halting vs pausing
 
-Production templates (`feature-kickoff`, `standard-task`) **pause** with `interrupt()` instead of
+Production templates (`feature-kickoff`, `standard-phase`, `standard-task`) **pause** with `interrupt()` instead of
 routing to a dead-end terminal. The CLI summary then has `interrupted: true` (and usually
 `halted: true` as well — halt fields record *why* and *where to redrive*). Use `agentgraph redrive`
 to continue. `agentgraph resume --resume-value` is for author-placed interrupts that expect a
@@ -156,16 +156,20 @@ like any other — if a dispatch's permission mode still blocks the write it nee
 
 ## Map/fan-out and subgraph composition
 
-`pick_next_task` / `run_one_task` (in `feature-kickoff`) replace a Python loop over
-`standard-task`. `run_one_task` invokes a **compiled** `standard-task` graph that shares the
+`pick_next_phase` / `run_one_phase` (in `feature-kickoff`) replace a Python loop over
+`standard-phase`. `run_one_phase` invokes a **compiled** `standard-phase` graph that shares the
 parent's checkpointer, each item on its own `thread_id` (`{parent}:{item-n}`). If the child
 pauses, the wrapper `interrupt()`s immediately so later map items do not keep running. On
 `agentgraph redrive`, the wrapper resumes the child with `Command(resume="redrive")` inside that
 item's thread. Permanently blocked items (missing dependency id) are left `blocked` and not
 dispatched. A paused upstream item stops the map (interrupt), it is not treated as done.
 
-Each item's artifacts land under `{run_dir}/05_run_tasks/item-{n}/` using the same
+Each item's artifacts land under `{run_dir}/05_run_phases/item-{n}/` using the same
 `{node_id}/attempt-{n}/output.md` convention as every other node. On-disk idempotency only treats
-a nested `04_success` receipt as done — a paused item is re-entered, not skipped.
+a nested `04_success` receipt as done — a paused item is re-entered, not skipped. After implement,
+review is dispatched only when the phase `review` field requires it (`always`, `if_substantial`
+when the diff is over threshold, never skipped). After all phases, `additional_test` runs the
+planner's unfiltered script; one `code-writer` `integration_fix` is allowed if that script fails;
+a green suite then dispatches the `final-reviewer` agent (no auto-fix on reject).
 
 `interrupt()` requires a checkpointer (`InMemorySaver` in tests; sqlite per Run in the CLI).

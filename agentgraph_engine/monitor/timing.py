@@ -13,13 +13,14 @@ from agentgraph_engine.constants import (
     HALTED_AT_NODE_KEY,
     HALTED_KEY,
     ITEM_KEY,
-    MAP_TASK_STATES_KEY,
+    MAP_PHASE_STATES_KEY,
     OUTCOME_KEY,
     REDRIVE_MESSAGE_KEY,
     REDRIVE_NODE_KEY,
     RESET_ATTEMPTS_KEY,
     RUN_DIR_KEY,
     SPEC_PATH_KEY,
+    PLAN_PATH_KEY,
     WORKER_CLI_KEY,
 )
 from agentgraph_engine.monitor.checkpointer import open_readonly_checkpointer
@@ -28,7 +29,7 @@ from agentgraph_engine.pause import INTERRUPT_PARENT_NODE_KEY, NESTED_CHECKPOINT
 _BRANCH_TO_PREFIX = "branch:to:"
 
 # Top-level state fields shared across graphs (states/base.py, states/feature_kickoff.py,
-# states/standard_task.py, pause.py) as opposed to a node's own `{node_id: {...}}` record
+# states/standard_task.py, states/standard_phase.py, pause.py) as opposed to a node's own `{node_id: {...}}` record
 # channel, which is what `updated_channels` uses to mark "this node ran".
 _GRAPH_LEVEL_CHANNELS = frozenset(
     {
@@ -42,7 +43,8 @@ _GRAPH_LEVEL_CHANNELS = frozenset(
         OUTCOME_KEY,
         WORKER_CLI_KEY,
         SPEC_PATH_KEY,
-        MAP_TASK_STATES_KEY,
+        PLAN_PATH_KEY,
+        MAP_PHASE_STATES_KEY,
         CURRENT_ITEM_KEY,
         CURRENT_ITEM_INDEX_KEY,
         ITEM_KEY,

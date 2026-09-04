@@ -1,14 +1,16 @@
 ---
 name: agentgraph-vertical-slice-tasks
-description: How to size and sequence tasks in a plan's task breakdown — vertical slices, prefactoring, blocking edges, the wide-refactor exception. Use when writing or reviewing a plan's Tasks section and its machine-readable task list.
+description: How to size and sequence tasks in a plan's task breakdown — vertical slices, prefactoring, blocking edges, the wide-refactor exception. Use when writing or reviewing a standalone standard-task work order. Not for feature-kickoff — use agentgraph-phase-sizing.
 ---
 
 # Vertical-Slice Task Sizing
 
+**Not for feature-kickoff.** Kickoff plans use `agentgraph-phase-sizing`. This skill remains for
+standalone `standard-task` single-bug / chore runs.
+
 Adapted from the `mattpocock-skills` plugin's `to-tickets` skill for this project's task-list
-format — tasks stay in `agent_works/plans/{slug}.tasks.json`, fanned out by the `feature-kickoff`
-graph's task-execution nodes; there's no ticket-per-file output, no tracker publish step, and no
-interactive breakdown quiz (the `tech-plan-reviewer` approval gate is the substitute).
+format — tasks stay in `agent_works/plans/{slug}.tasks.json`. The live `feature-kickoff` graph
+fans phases through `standard-phase`, not this skill.
 
 ## Cut vertical, not horizontal
 

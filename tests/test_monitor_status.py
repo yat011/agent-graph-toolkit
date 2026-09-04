@@ -19,10 +19,10 @@ from agentgraph_engine.constants import (
     HALTED_AT_NODE_KEY,
     HALTED_KEY,
     ITEMS_KEY,
-    LOAD_TASKS_NODE,
+    LOAD_PHASES_NODE,
     OUTCOME_KEY,
     RUN_DIR_KEY,
-    RUN_ONE_TASK_NODE,
+    RUN_ONE_PHASE_NODE,
 )
 from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.examples.hello_graph.nodes import CHECKPOINT_GATE_NODE
@@ -225,14 +225,14 @@ def test_finished_success_is_completed():
         assert fleet_row_from_snapshot("r", "g", snapshot)["status"] == "Completed"
 
 
-def test_run_one_task_node_current_node_is_item_n_of_m():
+def test_run_one_phase_node_current_node_is_item_n_of_m():
     items = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
     snapshot = _snapshot(
         values={
             CURRENT_ITEM_INDEX_KEY: 2,
-            LOAD_TASKS_NODE: {ITEMS_KEY: items},
+            LOAD_PHASES_NODE: {ITEMS_KEY: items},
         },
-        nxt=(RUN_ONE_TASK_NODE,),
+        nxt=(RUN_ONE_PHASE_NODE,),
     )
     assert current_node_label(snapshot) == "item 2 of 3"
 
