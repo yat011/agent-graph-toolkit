@@ -67,13 +67,12 @@ agentgraph_engine/                    # the Python engine (uv-managed package)
   constants.py                        # shared route labels, Result: phrases, halt reasons
   routing.py                          # GateConfig + classify_gate / gate_route
   states/                             # composed per-node TypedDict records
-  nodes/                              # engine-shared node functions (pause + hello_graph halted sink)
+  nodes/                              # engine-shared node functions (pause helper)
   pause.py                            # interrupt() pause helper + redrive payload
   dispatch.py                         # headless-CLI Worker dispatch + Result: line parsing
   runs.py                             # run id / checkpoint path conventions (SqliteSaver)
   graph_loader.py                     # importlib-based dynamic graph.py loading
   cli.py                              # `agentgraph` start/resume/status/redrive
-  examples/hello_graph/               # minimal worked example (sequence, map, checker, 1 CLI dispatch)
 skills/
   agentgraph-define-graph/              # plan -> graph.py
   agentgraph-run-graph/                 # run a graph.py via the `agentgraph` CLI
@@ -109,7 +108,7 @@ uv sync
 Copy (or symlink) `skills/`, `agents/`, and `agentgraph_engine/` into the host's project. Then
 talk to the host: `run the feature-kickoff graph`.
 
-Mechanical nodes dispatch with `model="cheap"`, mapped to the CLI's cheapest available model.
+Nodes dispatch at the `normal` tier by default; the feature-kickoff planner dispatches at the `strong` tier (`model="strong"`), mapped per Worker CLI (see `skills/agentgraph-run-graph/ENGINE-CLI.md`).
 
 Prefer [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) when connected.
 Missing is a warning in `INDEX.md`, not a stop.

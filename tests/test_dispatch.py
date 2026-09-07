@@ -6,10 +6,7 @@ A fake `executor` stands in for a real subprocess call — that's the documented
 (the "Executor"), not an implementation detail.
 """
 
-from agentgraph_engine.constants import (
-    MODEL_CHEAP,
-    ROLE_GENERAL_PURPOSE,
-)
+from agentgraph_engine.constants import ROLE_GENERAL_PURPOSE
 
 import json
 import subprocess
@@ -220,30 +217,29 @@ def test_dispatch_never_passes_resume_or_continue_flags(tmp_path):
     assert "--exclude-dynamic-system-prompt-sections" in argv
 
 
-def test_dispatch_model_cheap_alias_maps_to_haiku(tmp_path):
+def test_dispatch_strong_tier_maps_to_opus(tmp_path):
     calls = []
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     dispatch_worker(
-        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, model=MODEL_CHEAP,
+        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, model="strong",
         executor=make_executor(write_output=True, call_log=calls),
     )
     argv = calls[0]
     idx = argv.index("--model")
-    assert argv[idx + 1] == "haiku"
+    assert argv[idx + 1] == "opus"
 
 
-def test_dispatch_haiku_model_uses_accept_edits_with_write_allowlist(tmp_path):
+def test_dispatch_normal_tier_uses_auto_permission_mode(tmp_path):
     calls = []
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     dispatch_worker(
-        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, model="haiku",
+        role=ROLE_GENERAL_PURPOSE, task_prompt="x", output_path=output_path, model="normal",
         executor=make_executor(write_output=True, call_log=calls),
     )
     argv = calls[0]
-    assert "--permission-mode" in argv and "acceptEdits" in argv
-    assert "auto" not in argv
-    idx = argv.index("--allowedTools")
-    assert argv[idx + 1] == "Write"
+    assert "--permission-mode" in argv and "auto" in argv
+    idx = argv.index("--model")
+    assert argv[idx + 1] == "sonnet"
 
 
 def test_dispatch_with_retry_stops_at_first_ok(tmp_path):
@@ -390,18 +386,6 @@ _CLAUDE_SONNET_TAIL = [
     "--model",
     "sonnet",
 ]
-_CLAUDE_HAIKU_TAIL = [
-    "-p",
-    "--permission-mode",
-    "acceptEdits",
-    "--allowedTools",
-    "Write",
-    "--output-format",
-    "json",
-    "--exclude-dynamic-system-prompt-sections",
-    "--model",
-    "haiku",
-]
 _CLAUDE_OPUS_TAIL = [
     "-p",
     "--permission-mode",
@@ -412,7 +396,7 @@ _CLAUDE_OPUS_TAIL = [
     "--model",
     "opus",
 ]
-_GROK_TAIL = [
+_GROK_TAIL_HIGH = [
     "--permission-mode",
     "auto",
     "--output-format",
@@ -422,7 +406,17 @@ _GROK_TAIL = [
     "--effort",
     "high",
 ]
-_CURSOR_TAIL = [
+_GROK_TAIL_XHIGH = [
+    "--permission-mode",
+    "auto",
+    "--output-format",
+    "json",
+    "--model",
+    "grok-4.6",
+    "--effort",
+    "xhigh",
+]
+_CURSOR_TAIL_HIGH = [
     "-p",
     "--auto-review",
     "--approve-mcps",
@@ -432,16 +426,15 @@ _CURSOR_TAIL = [
     "--model",
     "cursor-grok-4.6-high",
 ]
-_MUSE_TAIL_LOW = [
-    "exec",
-    "--json",
-    "--approval-mode",
-    "never",
-    "--disable-sandbox",
-    "--trust-workspace",
-    "--user-input-auto-resolve",
-    "--reasoning-effort",
-    "low",
+_CURSOR_TAIL_XHIGH = [
+    "-p",
+    "--auto-review",
+    "--approve-mcps",
+    "--trust",
+    "--output-format",
+    "json",
+    "--model",
+    "cursor-grok-4.6-xhigh",
 ]
 _MUSE_TAIL_HIGH = [
     "exec",
@@ -470,21 +463,17 @@ _MUSE_TAIL_MAX = [
 @pytest.mark.parametrize(
     ("cli", "model", "binary_stem", "argv_tail"),
     [
-        ("claude", MODEL_CHEAP, "claude", _CLAUDE_HAIKU_TAIL),
-        ("claude", "sonnet", "claude", _CLAUDE_SONNET_TAIL),
-        ("claude", "opus", "claude", _CLAUDE_OPUS_TAIL),
+        ("claude", "normal", "claude", _CLAUDE_SONNET_TAIL),
+        ("claude", "strong", "claude", _CLAUDE_OPUS_TAIL),
         ("claude", None, "claude", _CLAUDE_SONNET_TAIL),
-        ("grok", MODEL_CHEAP, "grok", _GROK_TAIL),
-        ("grok", "sonnet", "grok", _GROK_TAIL),
-        ("grok", "opus", "grok", _GROK_TAIL),
-        ("grok", None, "grok", _GROK_TAIL),
-        ("cursor", MODEL_CHEAP, "cursor-agent", _CURSOR_TAIL),
-        ("cursor", "sonnet", "cursor-agent", _CURSOR_TAIL),
-        ("cursor", "opus", "cursor-agent", _CURSOR_TAIL),
-        ("cursor", None, "cursor-agent", _CURSOR_TAIL),
-        ("muse", MODEL_CHEAP, "muse", _MUSE_TAIL_LOW),
-        ("muse", "sonnet", "muse", _MUSE_TAIL_HIGH),
-        ("muse", "opus", "muse", _MUSE_TAIL_MAX),
+        ("grok", "normal", "grok", _GROK_TAIL_HIGH),
+        ("grok", "strong", "grok", _GROK_TAIL_XHIGH),
+        ("grok", None, "grok", _GROK_TAIL_HIGH),
+        ("cursor", "normal", "cursor-agent", _CURSOR_TAIL_HIGH),
+        ("cursor", "strong", "cursor-agent", _CURSOR_TAIL_XHIGH),
+        ("cursor", None, "cursor-agent", _CURSOR_TAIL_HIGH),
+        ("muse", "normal", "muse", _MUSE_TAIL_HIGH),
+        ("muse", "strong", "muse", _MUSE_TAIL_MAX),
         ("muse", None, "muse", _MUSE_TAIL_HIGH),
     ],
 )
@@ -550,14 +539,15 @@ def test_grok_single_flag_takes_prompt_not_the_next_option(tmp_path):
     assert not argv[p_idx + 1].startswith("-")
 
 
-def test_unknown_graph_model_is_error(tmp_path):
+@pytest.mark.parametrize("model", ["gpt-4", "cheap", "haiku", "sonnet", "opus"])
+def test_unknown_graph_model_is_error(tmp_path, model):
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     with pytest.raises(UnknownGraphModelError, match="unknown graph model"):
         dispatch_worker(
             role=ROLE_GENERAL_PURPOSE,
             task_prompt="x",
             output_path=output_path,
-            model="gpt-4",
+            model=model,
             executor=make_executor(write_output=True),
         )
 
@@ -603,7 +593,7 @@ def test_cursor_usage_fields_are_null_when_envelope_has_no_tokens(tmp_path):
         role=ROLE_GENERAL_PURPOSE,
         task_prompt="x",
         output_path=output_path,
-        model="sonnet",
+        model="normal",
         executor=make_executor(write_output=True, envelope={"result": "ok"}),
     )
     expected = {
@@ -631,7 +621,7 @@ def test_usage_json_written_when_executor_cannot_start(tmp_path):
         role=ROLE_GENERAL_PURPOSE,
         task_prompt="x",
         output_path=output_path,
-        model=MODEL_CHEAP,
+        model="strong",
         executor=boom,
     )
     assert result.ok is False
@@ -639,7 +629,7 @@ def test_usage_json_written_when_executor_cannot_start(tmp_path):
     data = json.loads(usage_path.read_text(encoding="utf-8"))
     assert data == {
         "worker_cli": "claude",
-        "model": "haiku",
+        "model": "opus",
         "cost_usd": None,
         "input_tokens": None,
         "output_tokens": None,
@@ -669,7 +659,7 @@ def test_grok_envelope_accepts_cache_read_tokens_field_names(tmp_path):
     )
     assert result.usage == {
         "worker_cli": "grok",
-        "model": "grok-4.6",
+        "model": "high",
         "cost_usd": 0.4,
         "input_tokens": 1,
         "output_tokens": 2,
@@ -796,7 +786,7 @@ def test_grok_orca_dispatch_drives_orca_create_wait_send_wait_close(tmp_path, mo
 
     expected_usage = {
         "worker_cli": "grok-orca",
-        "model": "grok-4.6",
+        "model": "high",
         "cost_usd": None,
         "input_tokens": None,
         "output_tokens": None,
@@ -806,6 +796,26 @@ def test_grok_orca_dispatch_drives_orca_create_wait_send_wait_close(tmp_path, mo
     usage_path = output_path.parent / "usage.json"
     assert json.loads(usage_path.read_text(encoding="utf-8")) == expected_usage
     assert result.usage == expected_usage
+
+
+def test_grok_orca_strong_tier_uses_xhigh_effort(tmp_path, monkeypatch):
+    resolve_worker_cli(cli_flag="grok-orca")
+    _stub_orca_and_grok_which(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+    output_path = tmp_path / "dispatch_worker" / "attempt-1" / "output.md"
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        model="strong",
+        executor=make_orca_cli_executor(calls),
+    )
+    assert result.ok is True
+    command = calls[0][calls[0].index("--command") + 1]
+    assert "grok-4.6" in command
+    assert "--effort" in command
+    assert "xhigh" in command
+    assert result.usage["model"] == "xhigh"
 
 
 def test_grok_orca_closes_terminal_when_second_wait_fails(tmp_path, monkeypatch):
@@ -945,7 +955,7 @@ def test_muse_usage_fields_are_null_with_effort_model(tmp_path):
         role=ROLE_GENERAL_PURPOSE,
         task_prompt="x",
         output_path=output_path,
-        model="sonnet",
+        model="normal",
         executor=_muse_executor(
             output_text="Result: done\n",
             terminal_text="Result: done",

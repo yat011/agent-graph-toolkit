@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Protocol
 
 from agentgraph_engine.constants import (
-    MODEL_CHEAP,
     WORKER_CLI_CLAUDE,
     WORKER_CLI_CURSOR,
     WORKER_CLI_CURSOR_BINARY,
@@ -34,23 +33,22 @@ from agentgraph_engine.constants import (
     WORKER_CLI_MUSE,
 )
 
-GRAPH_MODEL_HAIKU = "haiku"
-GRAPH_MODEL_SONNET = "sonnet"
-GRAPH_MODEL_OPUS = "opus"
+GRAPH_TIER_NORMAL = "normal"
+GRAPH_TIER_STRONG = "strong"
 
-CLAUDE_MODEL_CHEAP = "haiku"
-CLAUDE_MODEL_SONNET = "sonnet"
-CLAUDE_MODEL_OPUS = "opus"
+CLAUDE_MODEL_NORMAL = "sonnet"
+CLAUDE_MODEL_STRONG = "opus"
 GROK_MODEL = "grok-4.6"
-GROK_EFFORT = "high"
-CURSOR_MODEL = "cursor-grok-4.6-high"
-# Muse reasoning effort per graph model tier. `muse exec` takes no vendor model id for
-# the Meta provider, so the tier maps onto its documented effort ladder instead; sonnet
+GROK_EFFORT_NORMAL = "high"
+GROK_EFFORT_STRONG = "xhigh"
+CURSOR_MODEL_NORMAL = "cursor-grok-4.6-high"
+CURSOR_MODEL_STRONG = "cursor-grok-4.6-xhigh"
+# Muse reasoning effort per graph tier. `muse exec` takes no vendor model id for
+# the Meta provider, so the tier maps onto its documented effort ladder instead; normal
 # maps to the CLI default (`high`). Recorded as the usage `model` value, like the
 # vendor model strings above.
-MUSE_EFFORT_CHEAP = "low"
-MUSE_EFFORT_SONNET = "high"
-MUSE_EFFORT_OPUS = "max"
+MUSE_EFFORT_NORMAL = "high"
+MUSE_EFFORT_STRONG = "max"
 
 _resolved_worker_cli: ContextVar[str | None] = ContextVar("agentgraph_worker_cli", default=None)
 
@@ -60,7 +58,7 @@ class WorkerCliError(ValueError):
 
 
 class UnknownGraphModelError(ValueError):
-    """Graph `model` is not cheap/haiku/sonnet/opus/unset."""
+    """Graph `model` is not normal/strong/unset."""
 
 
 WorkerExecutor = Callable[[list[str], str, int | None], subprocess.CompletedProcess]
@@ -170,18 +168,14 @@ def _read_settings_worker_cli(path: Path) -> str | None:
     return _require_legal(value, source=str(path))
 
 
-def _graph_model_row(graph_model: str | None) -> str:
-    """Map a graph `model=` value onto the cheap / sonnet / opus table row."""
-    if graph_model is None:
-        return GRAPH_MODEL_SONNET
-    if graph_model in {MODEL_CHEAP, GRAPH_MODEL_HAIKU}:
-        return MODEL_CHEAP
-    if graph_model == GRAPH_MODEL_SONNET:
-        return GRAPH_MODEL_SONNET
-    if graph_model == GRAPH_MODEL_OPUS:
-        return GRAPH_MODEL_OPUS
+def _graph_tier(graph_model: str | None) -> str:
+    """Map a graph `model=` value onto the normal / strong tier."""
+    if graph_model is None or graph_model == GRAPH_TIER_NORMAL:
+        return GRAPH_TIER_NORMAL
+    if graph_model == GRAPH_TIER_STRONG:
+        return GRAPH_TIER_STRONG
     raise UnknownGraphModelError(
-        f"unknown graph model {graph_model!r}; expected cheap, haiku, sonnet, opus, or unset"
+        f"unknown graph model {graph_model!r}; expected normal, strong, or unset"
     )
 
 
@@ -250,22 +244,19 @@ class ClaudeWorkerCli:
     binary = WORKER_CLI_CLAUDE
 
     def resolve_model(self, graph_model: str | None) -> str:
-        row = _graph_model_row(graph_model)
+        tier = _graph_tier(graph_model)
         return {
-            MODEL_CHEAP: CLAUDE_MODEL_CHEAP,
-            GRAPH_MODEL_SONNET: CLAUDE_MODEL_SONNET,
-            GRAPH_MODEL_OPUS: CLAUDE_MODEL_OPUS,
-        }[row]
+            GRAPH_TIER_NORMAL: CLAUDE_MODEL_NORMAL,
+            GRAPH_TIER_STRONG: CLAUDE_MODEL_STRONG,
+        }[tier]
 
     def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
-        if mapped_model == CLAUDE_MODEL_CHEAP:
-            permission = ["--permission-mode", "acceptEdits", "--allowedTools", "Write"]
-        else:
-            permission = ["--permission-mode", "auto"]
+        # Both tiers are Sonnet-tier and above, so the auto action-classifier always applies.
         return [
             resolved_binary,
             "-p",
-            *permission,
+            "--permission-mode",
+            "auto",
             "--output-format",
             "json",
             "--exclude-dynamic-system-prompt-sections",
@@ -293,8 +284,13 @@ class GrokWorkerCli:
     binary = WORKER_CLI_GROK
 
     def resolve_model(self, graph_model: str | None) -> str:
-        _graph_model_row(graph_model)
-        return GROK_MODEL
+        # The model id never varies; the tier maps onto `--effort`, which is also what
+        # lands in usage.json as `model` (same convention as the muse effort mapping).
+        tier = _graph_tier(graph_model)
+        return {
+            GRAPH_TIER_NORMAL: GROK_EFFORT_NORMAL,
+            GRAPH_TIER_STRONG: GROK_EFFORT_STRONG,
+        }[tier]
 
     def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]:
         # Grok's `-p` is `--single <PROMPT>` and must be followed by the prompt text.
@@ -308,9 +304,9 @@ class GrokWorkerCli:
             "--output-format",
             "json",
             "--model",
-            mapped_model,
+            GROK_MODEL,
             "--effort",
-            GROK_EFFORT,
+            mapped_model,
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:
@@ -333,8 +329,11 @@ class CursorWorkerCli:
     binary = WORKER_CLI_CURSOR_BINARY
 
     def resolve_model(self, graph_model: str | None) -> str:
-        _graph_model_row(graph_model)
-        return CURSOR_MODEL
+        tier = _graph_tier(graph_model)
+        return {
+            GRAPH_TIER_NORMAL: CURSOR_MODEL_NORMAL,
+            GRAPH_TIER_STRONG: CURSOR_MODEL_STRONG,
+        }[tier]
 
     def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
         return [
@@ -404,12 +403,11 @@ class MuseWorkerCli:
     binary = WORKER_CLI_MUSE
 
     def resolve_model(self, graph_model: str | None) -> str:
-        row = _graph_model_row(graph_model)
+        tier = _graph_tier(graph_model)
         return {
-            MODEL_CHEAP: MUSE_EFFORT_CHEAP,
-            GRAPH_MODEL_SONNET: MUSE_EFFORT_SONNET,
-            GRAPH_MODEL_OPUS: MUSE_EFFORT_OPUS,
-        }[row]
+            GRAPH_TIER_NORMAL: MUSE_EFFORT_NORMAL,
+            GRAPH_TIER_STRONG: MUSE_EFFORT_STRONG,
+        }[tier]
 
     def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]:
         # `exec` reads the prompt from its positional arg (never stdin) and emits JSONL
@@ -558,8 +556,13 @@ class GrokOrcaWorkerCli:
     binary = WORKER_CLI_GROK
 
     def resolve_model(self, graph_model: str | None) -> str:
-        _graph_model_row(graph_model)
-        return GROK_MODEL
+        # Same convention as GrokWorkerCli: the model id is fixed, the mapped token is the
+        # `--effort` level and the usage.json `model` value.
+        tier = _graph_tier(graph_model)
+        return {
+            GRAPH_TIER_NORMAL: GROK_EFFORT_NORMAL,
+            GRAPH_TIER_STRONG: GROK_EFFORT_STRONG,
+        }[tier]
 
     def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
         return [
@@ -567,9 +570,9 @@ class GrokOrcaWorkerCli:
             "--permission-mode",
             "auto",
             "--model",
-            mapped_model,
+            GROK_MODEL,
             "--effort",
-            GROK_EFFORT,
+            mapped_model,
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:

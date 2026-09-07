@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
-import subprocess
-from pathlib import Path
+from typing import TypedDict
 
-from langgraph.types import Interrupt, PregelTask, StateSnapshot
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, Interrupt, PregelTask, StateSnapshot, interrupt
 
 from agentgraph_engine.constants import (
     CURRENT_ITEM_INDEX_KEY,
@@ -21,11 +20,8 @@ from agentgraph_engine.constants import (
     ITEMS_KEY,
     LOAD_PHASES_NODE,
     OUTCOME_KEY,
-    RUN_DIR_KEY,
     RUN_ONE_PHASE_NODE,
 )
-from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
-from agentgraph_engine.examples.hello_graph.nodes import CHECKPOINT_GATE_NODE
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
 from agentgraph_engine.monitor.discovery import discover_runs
 from agentgraph_engine.monitor.status import (
@@ -35,15 +31,6 @@ from agentgraph_engine.monitor.status import (
     fleet_rows,
 )
 from agentgraph_engine.runs import open_checkpointer, thread_config
-from langgraph.types import Command
-
-HELLO_GRAPH_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "agentgraph_engine"
-    / "examples"
-    / "hello_graph"
-    / "graph.py"
-)
 
 MINI_GRAPH_PY = '''
 from langgraph.graph import StateGraph, START, END
@@ -63,7 +50,34 @@ def build_graph(checkpointer=None):
     return g.compile(checkpointer=checkpointer)
 '''
 
-MARKER = OUTPUT_PATH_LINE_PREFIX
+GATE_NODE = "gate_node"
+FINISH_NODE = "finish_node"
+
+
+class _GateState(TypedDict, total=False):
+    items: list
+    outcome: str
+    fail: bool
+    gate_node: dict
+
+
+def _gate(state):
+    ack = interrupt({"message": "fixture graph paused at gate"})
+    return {GATE_NODE: {"ack": ack}}
+
+
+def _finish(state):
+    return {OUTCOME_KEY: "fail" if state.get("fail") else "pass"}
+
+
+def _build_gate_graph(checkpointer=None):
+    graph = StateGraph(_GateState)
+    graph.add_node(GATE_NODE, _gate)
+    graph.add_node(FINISH_NODE, _finish)
+    graph.add_edge(START, GATE_NODE)
+    graph.add_edge(GATE_NODE, FINISH_NODE)
+    graph.add_edge(FINISH_NODE, END)
+    return graph.compile(checkpointer=checkpointer)
 
 
 def _snapshot(*, values=None, nxt=(), interrupts=(), tasks=()):
@@ -83,54 +97,26 @@ def _interrupt(value=None):
     return Interrupt(value=value if value is not None else {"message": "paused"})
 
 
-def _write_output(input_text: str, content: str) -> None:
-    path_line = next(line for line in input_text.splitlines() if line.startswith(MARKER))
-    out_path = Path(path_line[len(MARKER) :].strip())
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(content, encoding="utf-8")
-
-
-def _ok_executor(content="Said hello.\nResult: greeted"):
-    def executor(argv, input_text, timeout):
-        _write_output(input_text, content)
-        return subprocess.CompletedProcess(
-            argv, 0, stdout=json.dumps({"result": content}), stderr=""
-        )
-
-    return executor
-
-
-def _fail_executor():
-    def executor(argv, input_text, timeout):
-        return subprocess.CompletedProcess(argv, 1, stdout='{"result":""}', stderr="boom")
-
-    return executor
-
-
-def _hello_compiled(checkpointer):
-    return get_build_graph(load_graph_module(HELLO_GRAPH_PATH))(checkpointer=checkpointer)
-
-
 def test_snapshot_next_nonempty_without_interrupt_is_running():
     snapshot = _snapshot(nxt=("greet_node",))
-    row = fleet_row_from_snapshot("run-a", "hello_graph", snapshot)
+    row = fleet_row_from_snapshot("run-a", "fixture-graph", snapshot)
     assert row["status"] == "Running"
     assert row["current_node"] == "greet_node"
     assert row["run_id"] == "run-a"
-    assert row["graph_name"] == "hello_graph"
+    assert row["graph_name"] == "fixture-graph"
 
 
-def test_hello_graph_checkpoint_gate_interrupt_is_paused_awaiting_redrive(tmp_path):
+def test_gate_interrupt_is_paused_awaiting_redrive():
     from langgraph.checkpoint.memory import InMemorySaver
 
-    compiled = _hello_compiled(InMemorySaver())
-    config = thread_config("hello-gate")
-    compiled.invoke({RUN_DIR_KEY: str(tmp_path), ITEMS_KEY: ["x"]}, config=config)
+    compiled = _build_gate_graph(InMemorySaver())
+    config = thread_config("fixture-gate")
+    compiled.invoke({ITEMS_KEY: ["x"]}, config=config)
     snapshot = compiled.get_state(config)
-    assert snapshot.next == (CHECKPOINT_GATE_NODE,)
-    row = fleet_row_from_snapshot("hello-gate", "hello_graph", snapshot)
+    assert snapshot.next == (GATE_NODE,)
+    row = fleet_row_from_snapshot("fixture-gate", "fixture-graph", snapshot)
     assert row["status"] == "Paused-awaiting-redrive"
-    assert row["current_node"] == CHECKPOINT_GATE_NODE
+    assert row["current_node"] == GATE_NODE
 
 
 def test_unmet_dependencies_interrupt_is_blocked():
@@ -183,40 +169,31 @@ def test_task_interrupts_count_as_open_interrupt_even_when_snapshot_interrupts_e
     assert fleet_row_from_snapshot("r", "g", snapshot)["status"] == "Paused-awaiting-redrive"
 
 
-def test_hello_graph_fail_terminal_is_failed(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        "agentgraph_engine.dispatch._run_subprocess",
-        _ok_executor(content="Result: something-else"),
-    )
+def test_fail_outcome_is_failed():
     from langgraph.checkpoint.memory import InMemorySaver
 
-    compiled = _hello_compiled(InMemorySaver())
-    config = thread_config("hello-fail")
-    compiled.invoke({RUN_DIR_KEY: str(tmp_path), ITEMS_KEY: ["a", "b"]}, config=config)
+    compiled = _build_gate_graph(InMemorySaver())
+    config = thread_config("fixture-fail")
+    compiled.invoke({ITEMS_KEY: ["a", "b"], "fail": True}, config=config)
     compiled.invoke(Command(resume="go"), config=config)
     snapshot = compiled.get_state(config)
     assert snapshot.next == ()
     assert snapshot.values.get(OUTCOME_KEY) == "fail"
-    row = fleet_row_from_snapshot("hello-fail", "hello_graph", snapshot)
+    row = fleet_row_from_snapshot("fixture-fail", "fixture-graph", snapshot)
     assert row["status"] == "Failed"
 
 
-def test_hello_graph_halted_sink_is_failed(monkeypatch, tmp_path):
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _fail_executor())
-    from langgraph.checkpoint.memory import InMemorySaver
-
-    compiled = _hello_compiled(InMemorySaver())
-    config = thread_config("hello-halt")
-    compiled.invoke({RUN_DIR_KEY: str(tmp_path), ITEMS_KEY: ["x"]}, config=config)
-    compiled.invoke(Command(resume="go"), config=config)
-    snapshot = compiled.get_state(config)
-    assert snapshot.next == ()
-    assert snapshot.values.get(HALTED_KEY) is True
-    assert snapshot.values.get(HALT_REASON_KEY) == HALT_RETRIES_EXHAUSTED
-    assert OUTCOME_KEY not in snapshot.values or snapshot.values.get(OUTCOME_KEY) is None
-    row = fleet_row_from_snapshot("hello-halt", "hello_graph", snapshot)
+def test_halted_technical_failure_is_failed():
+    snapshot = _snapshot(
+        values={
+            HALTED_KEY: True,
+            HALT_REASON_KEY: HALT_RETRIES_EXHAUSTED,
+            HALTED_AT_NODE_KEY: "dispatch_worker_node",
+        },
+    )
+    row = fleet_row_from_snapshot("fixture-halt", "fixture-graph", snapshot)
     assert row["status"] == "Failed"
-    assert row["current_node"] == snapshot.values.get(HALTED_AT_NODE_KEY)
+    assert row["current_node"] == "dispatch_worker_node"
 
 
 def test_finished_success_is_completed():

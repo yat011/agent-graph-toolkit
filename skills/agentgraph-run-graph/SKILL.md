@@ -30,12 +30,12 @@ the user how to proceed on a halt, or resume a deliberate `interrupt()` pause.
 - Optionally, "start fresh" / "new run" — just call `agentgraph start` again; it always creates a
   new `run_id`, never silently reuses an old one.
 - Optionally, "redrive `{graph-name}`" to continue a **paused** production run (gate reject
-  budget, `Result: manual` / unrecognized, Worker death, nested-task interrupt) or a **halted**
-  hello_graph sink, after the user fixes the cause — `agentgraph redrive --run {run_path}`. Never
+  budget, `Result: manual` / unrecognized, Worker death, nested-task interrupt),
+  after the user fixes the cause — `agentgraph redrive --run {run_path}`. Never
   auto-redrive.
 - Optionally, "resume `{run_path}`" for an author-placed `interrupt()` that expects a resume
-  value (hello_graph's checkpoint gate) — `agentgraph resume --run {run_path} [--resume-value
-  {value}]`. Production template pauses use `redrive`, not `resume`.
+  value — `agentgraph resume --run {run_path} [--resume-value {value}]`. Production
+  template pauses use `redrive`, not `resume`.
 
 ## Pick the graph
 
@@ -109,16 +109,16 @@ guess:
   Every pause resets writer+gate `attempt_count`. Gate `Result: manual` / unrecognized redrives
   **that gate** (pass `--message` to instruct the reviewer). Reject-budget exhaustion still
   redrives the code-writer. `retries_exhausted` redrives the failed node and also resets.
-  hello_graph's checkpoint gate is the exception: it expects `agentgraph resume --run {run_path}
-  --resume-value {value}`.
-- **`halted: true` without `interrupted`** — hello_graph's technical sink (it still ENDs). Report
-  the reason; `agentgraph redrive` uses time-travel for that leftover path.
+  Author-placed interrupts that expect a resume value use `agentgraph resume --run
+  {run_path} --resume-value {value}` instead.
+- **`halted: true` without `interrupted`** — a graph that ENDed on a technical halt instead of
+  pausing (no shipped template does this). Report the reason; `agentgraph redrive` uses
+  time-travel for that leftover path.
 
 ## Halting and pausing
 
 A failing/erroring Worker CLI dispatch is an ordinary technical failure. Production templates
-pass `retry=0`, so the first failure pauses (`halt_reason: "retries_exhausted"`) or ENDs
-(hello_graph). Reasons:
+pass `retry=0`, so the first failure pauses (`halt_reason: "retries_exhausted"`). Reasons:
 
 - `retries_exhausted` — a node's headless-CLI Worker dispatch failed (non-zero exit with no
   `Result:` line in output.md, or the Worker didn't write the file). Redrive the same node;

@@ -164,7 +164,7 @@ def _reset_nested_attempt_records(values: dict) -> dict:
 
 
 def cmd_redrive(args: argparse.Namespace) -> int:
-    """Resume a paused Run (interrupt) or re-attempt a halted hello_graph sink.
+    """Resume a paused Run (interrupt) or re-attempt a halted Run's failing node.
 
     If the checkpoint has interrupts, `Command(resume=...)` continues the pause node,
     which then `Command(goto=...)`s. Nested payloads with `parent_node` re-enter that
@@ -172,7 +172,7 @@ def cmd_redrive(args: argparse.Namespace) -> int:
     Every pause zeroes nested `attempt_count`. `--message` is stored as `redrive_message`
     and injected into the target node's Worker prompt.
 
-    Time-travel fallback remains for graphs that still END on a technical halt (hello_graph).
+    Time-travel fallback remains for graphs that still END on a technical halt.
     """
     worker_cli = _resolve_worker_cli_from_args(args)
     run_path = Path(args.run).resolve()

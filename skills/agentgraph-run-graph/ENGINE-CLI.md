@@ -58,7 +58,7 @@ Resumes a Run paused at a LangGraph `interrupt()` call (not a halt — see below
 `run_path`'s `checkpoints.sqlite`. `--resume-value` becomes the interrupted node's `interrupt()`
 return value via `Command(resume=...)`. Nodes already completed before the interrupt are **not**
 re-executed — this is the mechanism behind the migration's demonstrated checkpoint-resume proof
-(see `agentgraph_engine/examples/hello_graph/` and its test).
+(proven by `tests/test_checkpoint_resume.py` against a real on-disk `SqliteSaver`).
 
 ### `agentgraph status --run <run_path>`
 
@@ -68,8 +68,8 @@ reached `END`).
 
 ### `agentgraph redrive --run <run_path> [--message <text>] [--recursion-limit N] [--cli claude|grok|cursor|grok-orca|muse]`
 
-Continues a **paused** Run (`interrupt()` at `pause_node` or inside a nested-task wrapper) or
-re-attempts a **halted** hello_graph sink.
+Continues a **paused** Run (`interrupt()` at `pause_node` or inside a nested-task wrapper).
+A time-travel fallback remains for graphs that still END on a technical halt.
 
 If the checkpoint has interrupts, `redrive` issues `Command(resume=...)`. The pause node
 (or nested map wrapper) then `Command(goto=redrive_node, update=...)`. Every pause zeroes nested
@@ -80,7 +80,7 @@ the **gate itself** after `Result: manual` / unrecognized; the **writer** after 
 the **failed node** after a technical death.
 
 Time-travel (`get_state_history` + `update_state` + `invoke(None)`) remains only for graphs that
-still END on a technical halt (hello_graph). Production templates pause instead of routing to END.
+still END on a technical halt. Production templates pause instead of routing to END.
 
 An unrecognized `Result:` line on a gate is `unrecognized_result` and pauses **immediately** —
 there is no self-retry hop.
@@ -114,10 +114,10 @@ Production templates (`feature-kickoff`, `standard-phase`) **pause** with `inter
 routing to a dead-end terminal. The CLI summary then has `interrupted: true` (and usually
 `halted: true` as well — halt fields record *why* and *where to redrive*). Use `agentgraph redrive`
 to continue. `agentgraph resume --resume-value` is for author-placed interrupts that expect a
-resume value (hello_graph's checkpoint gate).
+resume value.
 
-hello_graph still ENDs on a technical Worker death (`halted` sink). That path keeps the
-time-travel redrive fallback.
+A graph that ENDs on a technical Worker death keeps the
+time-travel redrive fallback (no shipped template does this — they pause instead).
 
 Halt / pause reasons:
 
@@ -144,20 +144,28 @@ extracted from the dispatched Worker's output (`agentgraph_engine.dispatch.extra
 — string-matching only, never an LLM judgment call. A Coordinating agent invoking
 `agentgraph start`/`resume` never judges a branch itself; that logic is compiled into the graph.
 
-## Permission mode by model tier
+## Tiers and permission mode
 
-On the Claude Worker CLI, `--permission-mode auto` lets the model's own action-classifier judge
-each tool call, but that classifier requires Sonnet-tier and above. A dispatch resolved to the
-`haiku` model instead uses `--permission-mode acceptEdits --allowedTools Write` (no classifier
-needed; `Write` is the one tool this dispatch path's contract requires). Grok uses
-`--permission-mode auto` and passes the work order as the value of `-p` / `--single` (Grok does
-not read that prompt from stdin). Cursor uses `--auto-review` (plus `--approve-mcps` and `--trust`, never
-`--force`). Muse runs `muse exec --json` with the work order as its positional prompt
-(`exec` never reads stdin), the graph tier as `--reasoning-effort` (cheap `low`, sonnet
-`high`, opus `max`), and `--approval-mode never --disable-sandbox --trust-workspace
-`--user-input-auto-resolve` so a headless worker can write files, run shell commands, and
-never block on input; its `run` lifts the JSONL `run_terminal` text into the envelope
-before parsing. `DispatchResult.ok` comes back `False` — an ordinary technical failure, retried/halted
+Every dispatch runs at one of two graph tiers: `normal` (the default — omit `model=`) or
+`strong` (`model="strong"`, currently only the feature-kickoff planner). Each Worker CLI maps
+the tier onto its own model/effort ladder:
+
+- Claude: `normal` → `--model sonnet`, `strong` → `--model opus`, always with
+  `--permission-mode auto` (whose action-classifier requires Sonnet-tier and above, so both
+  tiers qualify).
+- Grok: `--model grok-4.6` with `--effort high` (`normal`) or `--effort xhigh` (`strong`);
+  the work order goes as the value of `-p` / `--single` (Grok does not read that prompt
+  from stdin). `grok-orca` sends the same flags to the Grok TUI hosted in its Orca pane.
+- Cursor: `--model cursor-grok-4.6-high` (`normal`) or `cursor-grok-4.6-xhigh` (`strong`),
+  plus `--auto-review --approve-mcps --trust` (never `--force`).
+- Muse: the tier as `--reasoning-effort` (`normal` `high`, `strong` `max`) on
+  `muse exec --json`, with the work order as its positional prompt (`exec` never reads
+  stdin) and `--approval-mode never --disable-sandbox --trust-workspace
+  --user-input-auto-resolve` so a headless worker can write files, run shell commands, and
+  never block on input; its `run` lifts the JSONL `run_terminal` text into the envelope
+  before parsing.
+
+`DispatchResult.ok` comes back `False` — an ordinary technical failure, retried/halted
 like any other — if a dispatch's permission mode still blocks the write it needs.
 
 ## Map/fan-out and subgraph composition

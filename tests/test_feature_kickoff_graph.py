@@ -46,6 +46,7 @@ from agentgraph_engine.constants import (
     STDERR_KEY,
     STDOUT_KEY,
     TECH_PLAN_REVIEWER_NODE,
+    USAGE_KEY,
 )
 from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
 from agentgraph_engine.graph_loader import get_build_graph, load_graph_module
@@ -212,6 +213,32 @@ def test_accepted_path_env_working_reaches_success(monkeypatch, build_graph, tmp
     assert json.loads((run_dir / "04_load_phases" / "attempt-1" / "items.json").read_text(encoding="utf-8")) == []
     recap = (run_dir / "09_success" / "attempt-1" / "output.md").read_text(encoding="utf-8")
     assert "Result: recap written" in recap
+
+
+def test_planner_dispatches_strong_while_tech_reviewer_dispatches_normal(monkeypatch, build_graph, tmp_path):
+    """Tier policy: planner alone runs strong; every other node runs normal.
+
+    The default Worker CLI here is claude, so strong surfaces as `opus` and normal as
+    `sonnet` on each node's usage record.
+    """
+    run_dir = tmp_path / "run"
+    _tasks_json, spec_path = _seed_plan_files(tmp_path, [])
+    _seed_additional_test(run_dir)
+
+    monkeypatch.setattr(
+        "agentgraph_engine.dispatch._run_subprocess",
+        _script_executor(
+            [
+                ("Result: plan written", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+                (f"Result: {RESULT_ACCEPT}", True),
+            ]
+        ),
+    )
+    result = _compile(build_graph).invoke(_kickoff_state(run_dir, spec_path), config=_cfg())
+    assert result[OUTCOME_KEY] == OUTCOME_SUCCESS
+    assert result[PLANNER_NODE][USAGE_KEY]["model"] == "opus"
+    assert result[TECH_PLAN_REVIEWER_NODE][USAGE_KEY]["model"] == "sonnet"
 
 
 def test_reject_three_times_pauses_with_redrive_planner(monkeypatch, build_graph, tmp_path):

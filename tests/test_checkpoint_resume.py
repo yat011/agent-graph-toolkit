@@ -1,89 +1,94 @@
 """Demonstrated resume-from-checkpoint proof (deliverable i).
 
-This is a REAL executed proof, not an API-exists claim: a hello_graph run is driven to its
-`interrupt()` pause using one `SqliteSaver` instance backed by a real on-disk `.sqlite` file,
-that checkpointer is then closed entirely (simulating a process exit/crash), and a SECOND,
-independent `SqliteSaver` instance opened against the very same file resumes the run — proving
-persistence actually round-trips through disk, not through an in-memory object that happened to
-survive. `greet`/`fan_out` (the nodes before the interrupt) are call-counted and asserted to run
-exactly once each, proving the resume continues from the checkpoint rather than restarting cold.
+This is a REAL executed proof, not an API-exists claim: an inline fixture graph is driven
+to its `interrupt()` pause using one `SqliteSaver` instance backed by a real on-disk
+`.sqlite` file, that checkpointer is then closed entirely (simulating a process
+exit/crash), and a SECOND, independent `SqliteSaver` instance opened against the very
+same file resumes the run — proving persistence actually round-trips through disk, not
+through an in-memory object that happened to survive. `greet`/`fan_out` (the nodes
+before the interrupt) are call-counted and asserted to run exactly once each, proving
+the resume continues from the checkpoint rather than restarting cold.
 """
+
+import sqlite3
+from typing import TypedDict
+
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from agentgraph_engine.constants import (
     ITEMS_KEY,
     OUTCOME_KEY,
-    RUN_DIR_KEY,
 )
+from agentgraph_engine.runs import checkpoint_path_for, open_checkpointer, thread_config
 
-import json
-import sqlite3
-import subprocess
-from pathlib import Path
-
-from langgraph.types import Command
-
-from agentgraph_engine.examples.hello_graph.nodes import (
-    CHECKPOINT_GATE_NODE,
-    FAN_OUT_NODE,
-    GREET_NODE,
-    RESULTS_KEY,
-)
-from agentgraph_engine.dispatch import OUTPUT_PATH_LINE_PREFIX
-from agentgraph_engine.graph_loader import load_graph_module
-from agentgraph_engine.runs import checkpoint_path_for, open_checkpointer, run_dir_for
-
-GRAPH_PATH = (
-    Path(__file__).resolve().parent.parent / "agentgraph_engine" / "examples" / "hello_graph" / "graph.py"
-)
-
-MARKER = OUTPUT_PATH_LINE_PREFIX
+GREET_NODE = "greet_node"
+FAN_OUT_NODE = "fan_out_node"
+CHECKPOINT_GATE_NODE = "checkpoint_gate_node"
+PASS_NODE = "pass_node"
+RESULTS_KEY = "results"
 
 
-def _write_output(input_text: str, content: str) -> None:
-    path_line = next(line for line in input_text.splitlines() if line.startswith(MARKER))
-    out_path = Path(path_line[len(MARKER) :].strip())
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(content, encoding="utf-8")
+class _State(TypedDict, total=False):
+    items: list
+    outcome: str
+    greet_node: dict
+    fan_out_node: dict
+    checkpoint_gate_node: dict
 
 
-def _ok_executor():
-    def executor(argv, input_text, timeout):
-        content = "Said hello.\nResult: greeted"
-        _write_output(input_text, content)
-        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"result": content}), stderr="")
-
-    return executor
+def _greet(state):
+    return {GREET_NODE: {"greeting": "hello"}}
 
 
-def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(monkeypatch, tmp_path):
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _ok_executor())
+def _fan_out(state):
+    items = state.get(ITEMS_KEY) or []
+    return {FAN_OUT_NODE: {RESULTS_KEY: [str(item).upper() for item in items]}}
 
-    module = load_graph_module(GRAPH_PATH)
-    call_counts = {GREET_NODE: 0, FAN_OUT_NODE: 0}
-    orig_greet, orig_fan_out = module.greet, module.fan_out
 
+def _gate(state):
+    ack = interrupt({"message": "fixture graph paused at gate — resume to continue"})
+    return {CHECKPOINT_GATE_NODE: {"ack": ack}}
+
+
+def _finish(state):
+    return {OUTCOME_KEY: "pass"}
+
+
+def _build_graph(checkpointer, call_counts):
     def counting_greet(state):
         call_counts[GREET_NODE] += 1
-        return orig_greet(state)
+        return _greet(state)
 
     def counting_fan_out(state):
         call_counts[FAN_OUT_NODE] += 1
-        return orig_fan_out(state)
+        return _fan_out(state)
 
-    module.greet = counting_greet
-    module.fan_out = counting_fan_out
+    graph = StateGraph(_State)
+    graph.add_node(GREET_NODE, counting_greet)
+    graph.add_node(FAN_OUT_NODE, counting_fan_out)
+    graph.add_node(CHECKPOINT_GATE_NODE, _gate)
+    graph.add_node(PASS_NODE, _finish)
+    graph.add_edge(START, GREET_NODE)
+    graph.add_edge(GREET_NODE, FAN_OUT_NODE)
+    graph.add_edge(FAN_OUT_NODE, CHECKPOINT_GATE_NODE)
+    graph.add_edge(CHECKPOINT_GATE_NODE, PASS_NODE)
+    graph.add_edge(PASS_NODE, END)
+    return graph.compile(checkpointer=checkpointer)
 
-    graph_name = "hello-demo"
+
+def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(tmp_path):
+    graph_name = "fixture-demo"
     run_id = "20260101T000000_resume-proof"
     agent_works_root = tmp_path / "agent_works"
-    run_dir = run_dir_for(graph_name, run_id, agent_works_root)
-    config = {"configurable": {"thread_id": run_id}}
+    config = thread_config(run_id)
+    call_counts = {GREET_NODE: 0, FAN_OUT_NODE: 0}
 
     # --- Pass 1: run to the interrupt(), using checkpointer instance #1. ---
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp1:
-        compiled1 = module.build_graph(checkpointer=cp1)
-        r1 = compiled1.invoke({RUN_DIR_KEY: str(run_dir), ITEMS_KEY: ["p", "q"]}, config=config)
-        assert "__interrupt__" in r1, "expected the graph to pause at checkpoint_gate's interrupt()"
+        compiled1 = _build_graph(cp1, call_counts)
+        r1 = compiled1.invoke({ITEMS_KEY: ["p", "q"]}, config=config)
+        assert "__interrupt__" in r1, "expected the graph to pause at the gate's interrupt()"
         assert OUTCOME_KEY not in r1
 
     assert call_counts == {GREET_NODE: 1, FAN_OUT_NODE: 1}
@@ -106,7 +111,7 @@ def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(m
     # fresh process picking the run back up "cold" from disk, per the bug-fix/continuation
     # pattern this whole migration exists to support. ---
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp2:
-        compiled2 = module.build_graph(checkpointer=cp2)
+        compiled2 = _build_graph(cp2, call_counts)
         r2 = compiled2.invoke(Command(resume="go"), config=config)
         assert r2[OUTCOME_KEY] == "pass"
         assert r2[FAN_OUT_NODE][RESULTS_KEY] == ["P", "Q"]
@@ -115,20 +120,17 @@ def test_real_sqlite_checkpoint_survives_simulated_process_restart_and_resumes(m
     assert call_counts == {GREET_NODE: 1, FAN_OUT_NODE: 1}
 
 
-def test_status_via_cli_module_reports_pending_node_before_resume(monkeypatch, tmp_path):
+def test_status_via_cli_module_reports_pending_node_before_resume(tmp_path):
     """A `status` check between the two passes (as a human/CLI would do) sees the graph paused
-    exactly at checkpoint_gate, not silently finished or restarted."""
-    monkeypatch.setattr("agentgraph_engine.dispatch._run_subprocess", _ok_executor())
-    module = load_graph_module(GRAPH_PATH)
-
-    graph_name = "hello-demo-status"
+    exactly at the gate, not silently finished or restarted."""
+    graph_name = "fixture-demo-status"
     run_id = "20260101T000000_status-check"
     agent_works_root = tmp_path / "agent_works"
-    run_dir = run_dir_for(graph_name, run_id, agent_works_root)
-    config = {"configurable": {"thread_id": run_id}}
+    config = thread_config(run_id)
+    call_counts = {GREET_NODE: 0, FAN_OUT_NODE: 0}
 
     with open_checkpointer(graph_name, run_id, agent_works_root) as cp:
-        compiled = module.build_graph(checkpointer=cp)
-        compiled.invoke({RUN_DIR_KEY: str(run_dir), ITEMS_KEY: ["x"]}, config=config)
+        compiled = _build_graph(cp, call_counts)
+        compiled.invoke({ITEMS_KEY: ["x"]}, config=config)
         snapshot = compiled.get_state(config)
         assert snapshot.next == (CHECKPOINT_GATE_NODE,)

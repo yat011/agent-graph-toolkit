@@ -391,6 +391,7 @@ def planner(state: FeatureKickoffState) -> dict:
         role="planner",
         task_prompt=_planner_prompt(state, run_dir, attempt),
         output_path=output_path,
+        model="strong",
     )
     attach_usage(record, result)
     if not result.ok:

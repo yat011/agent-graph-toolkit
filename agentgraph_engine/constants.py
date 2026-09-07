@@ -24,9 +24,8 @@ GATE_HALT_REASONS = {
     HALT_UNRECOGNIZED_RESULT,
 }
 
-# Mechanism vocabulary — pause (interrupt) node id, leftover no-op terminal, Result: key.
+# Mechanism vocabulary — pause (interrupt) node id, Result: key.
 PAUSE_NODE = "pause_node"
-HALTED_NODE = "halted_node"
 RESULT_KEY = "result_line"
 
 # Mechanism vocabulary — graph-level and nested-record field names.
@@ -57,9 +56,8 @@ STDOUT_KEY = "stdout"
 RETURNCODE_KEY = "returncode"
 
 
-# Mechanism vocabulary — dispatch role / model aliases used by more than one graph.
+# Mechanism vocabulary — dispatch role aliases used by more than one graph.
 ROLE_GENERAL_PURPOSE = "general-purpose"
-MODEL_CHEAP = "cheap"
 
 # Mechanism vocabulary — Worker CLI identities (vendor CLI for a process).
 WORKER_CLI_CLAUDE = "claude"
