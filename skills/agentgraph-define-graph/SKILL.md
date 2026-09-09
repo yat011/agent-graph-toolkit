@@ -1,7 +1,9 @@
 ---
 name: agentgraph-define-graph
-description: Use when the user wants to turn a written plan into an executable agent graph for review — e.g. "define a graph for this plan", "turn this plan into a graph", "break this plan into nodes". Reads a plan file, breaks it into nodes, writes graph.py (project tier by default; user tier only when the user explicitly asks), and iterates with the user until they confirm it. Does not execute the graph — that's a separate skill.
+description: Turn a written plan into an executable agent graph for review.
 ---
+
+Invoke when the user says "define a graph for this plan", "turn this plan into a graph", or "break this plan into nodes".
 
 # agentgraph-define-graph
 
