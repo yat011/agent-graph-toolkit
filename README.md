@@ -110,7 +110,7 @@ talk to the host: `run the feature-kickoff graph`.
 
 Nodes dispatch at the `normal` tier by default; the feature-kickoff planner dispatches at the `strong` tier (`model="strong"`), mapped per Worker CLI (see `skills/agentgraph-run-graph/ENGINE-CLI.md`).
 
-Prefer [codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) when connected.
+Prefer Graft (DEV-98) when connected.
 Missing is a warning in `INDEX.md`, not a stop.
 
 ## License
