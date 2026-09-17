@@ -18,11 +18,11 @@ A failing/erroring CLI call is an ordinary technical failure, surfaced via
 pauses for a human `redrive`. Gate reject loops (reviewer → implement) are separate
 and stay in graph routers. A Worker killed after writing a `Result:` line in
 `output.md` still counts as `ok` so a wall-clock timeout cannot duplicate finished work.
-Claude and Cursor receive the combined prompt on stdin; Grok's `-p` requires that same
+Claude receives the combined prompt on stdin; Grok's `-p` requires that same
 prompt as the option value (stdin is still populated for the executor seam). `grok-orca`
-sends the combined prompt via `orca terminal send --text`, not grok argv. Muse takes the
-prompt as its `exec` positional arg (stdin is still populated for the executor seam) and
-emits JSONL, whose terminal text its `run` lifts into the envelope before parsing.
+sends the combined prompt via `orca terminal send --text`, not grok argv. Cursor and Muse
+take the prompt as a positional arg (stdin is still populated for the executor seam);
+Muse emits JSONL, whose terminal text its `run` lifts into the envelope before parsing.
 """
 
 from __future__ import annotations

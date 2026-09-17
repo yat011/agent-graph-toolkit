@@ -157,7 +157,8 @@ the tier onto its own model/effort ladder:
   the work order goes as the value of `-p` / `--single` (Grok does not read that prompt
   from stdin). `grok-orca` sends the same flags to the Grok TUI hosted in its Orca pane.
 - Cursor: `--model cursor-grok-4.6-high` (`normal`) or `cursor-grok-4.6-xhigh` (`strong`),
-  plus `--auto-review --approve-mcps --trust` (never `--force`).
+  plus `--auto-review --approve-mcps --trust` (never `--force`), with the work order as
+  its positional prompt (`cursor-agent -p` ignores stdin since 2026.09.10).
 - Muse: the tier as `--reasoning-effort` (both tiers `max`) on
   `muse exec --json`, with the work order as its positional prompt (`exec` never reads
   stdin) and `--approval-mode never --disable-sandbox --trust-workspace

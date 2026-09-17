@@ -334,7 +334,9 @@ class CursorWorkerCli:
             GRAPH_TIER_STRONG: CURSOR_MODEL_STRONG,
         }[tier]
 
-    def argv(self, resolved_binary: str, mapped_model: str, _prompt: str) -> list[str]:
+    def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]:
+        # `cursor-agent -p` reads the prompt from its positional arg (stdin is ignored
+        # since 2026.09.10). The prompt stays last: it is positional, so no flag may follow it.
         return [
             resolved_binary,
             "-p",
@@ -345,6 +347,7 @@ class CursorWorkerCli:
             "json",
             "--model",
             mapped_model,
+            prompt,
         ]
 
     def parse_envelope(self, envelope: dict) -> dict:

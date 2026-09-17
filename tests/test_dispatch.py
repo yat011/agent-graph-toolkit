@@ -484,8 +484,9 @@ def test_dispatch_argv_matches_spec_per_cli_and_model(tmp_path, cli, model, bina
         assert argv[1] == "-p"
         assert OUTPUT_PATH_LINE_PREFIX in argv[2]
         assert argv[3:] == argv_tail
-    elif cli == "muse":
-        # muse exec takes the prompt positionally and last — no flag may follow it.
+    elif cli in ("muse", "cursor"):
+        # muse exec and cursor-agent -p take the prompt positionally and last —
+        # no flag may follow it.
         assert OUTPUT_PATH_LINE_PREFIX in argv[-1]
         assert not argv[-1].startswith("-")
         assert argv[1:-1] == argv_tail
@@ -526,6 +527,37 @@ def test_grok_single_flag_takes_prompt_not_the_next_option(tmp_path):
     p_idx = argv.index("-p")
     assert argv[p_idx + 1] == stdin[0]
     assert not argv[p_idx + 1].startswith("-")
+
+
+def test_cursor_positional_prompt_matches_stdin(tmp_path):
+    # cursor-agent -p ignores stdin since 2026.09.10: the prompt must ride as the
+    # last positional arg, with stdin still populated for the executor seam.
+    resolve_worker_cli(cli_flag="cursor")
+    calls: list[list[str]] = []
+    stdin: list[str] = []
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+
+    def executor(argv: list, input_text: str, timeout: int | None) -> subprocess.CompletedProcess:
+        calls.append(argv)
+        stdin.append(input_text)
+        path_line = next(
+            line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+        )
+        out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX) :].strip())
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("Result: done\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
+
+    dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="x",
+        output_path=output_path,
+        executor=executor,
+    )
+    argv = calls[0]
+    assert argv[-1] == stdin[0]
+    assert OUTPUT_PATH_LINE_PREFIX in argv[-1]
+    assert not argv[-1].startswith("-")
 
 
 @pytest.mark.parametrize("model", ["gpt-4", "cheap", "haiku", "sonnet", "opus"])
