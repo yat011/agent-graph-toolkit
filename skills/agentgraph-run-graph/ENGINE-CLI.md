@@ -158,7 +158,7 @@ the tier onto its own model/effort ladder:
   from stdin). `grok-orca` sends the same flags to the Grok TUI hosted in its Orca pane.
 - Cursor: `--model cursor-grok-4.6-high` (`normal`) or `cursor-grok-4.6-xhigh` (`strong`),
   plus `--auto-review --approve-mcps --trust` (never `--force`).
-- Muse: the tier as `--reasoning-effort` (`normal` `high`, `strong` `max`) on
+- Muse: the tier as `--reasoning-effort` (both tiers `max`) on
   `muse exec --json`, with the work order as its positional prompt (`exec` never reads
   stdin) and `--approval-mode never --disable-sandbox --trust-workspace
   --user-input-auto-resolve` so a headless worker can write files, run shell commands, and

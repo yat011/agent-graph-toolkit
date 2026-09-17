@@ -44,10 +44,9 @@ GROK_EFFORT_STRONG = "xhigh"
 CURSOR_MODEL_NORMAL = "cursor-grok-4.6-high"
 CURSOR_MODEL_STRONG = "cursor-grok-4.6-xhigh"
 # Muse reasoning effort per graph tier. `muse exec` takes no vendor model id for
-# the Meta provider, so the tier maps onto its documented effort ladder instead; normal
-# maps to the CLI default (`high`). Recorded as the usage `model` value, like the
-# vendor model strings above.
-MUSE_EFFORT_NORMAL = "high"
+# the Meta provider, so the tier maps onto its documented effort ladder instead; both
+# tiers use `max`. Recorded as the usage `model` value, like the vendor model strings above.
+MUSE_EFFORT_NORMAL = "max"
 MUSE_EFFORT_STRONG = "max"
 
 _resolved_worker_cli: ContextVar[str | None] = ContextVar("agentgraph_worker_cli", default=None)

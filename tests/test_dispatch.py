@@ -436,17 +436,6 @@ _CURSOR_TAIL_XHIGH = [
     "--model",
     "cursor-grok-4.6-xhigh",
 ]
-_MUSE_TAIL_HIGH = [
-    "exec",
-    "--json",
-    "--approval-mode",
-    "never",
-    "--disable-sandbox",
-    "--trust-workspace",
-    "--user-input-auto-resolve",
-    "--reasoning-effort",
-    "high",
-]
 _MUSE_TAIL_MAX = [
     "exec",
     "--json",
@@ -472,9 +461,9 @@ _MUSE_TAIL_MAX = [
         ("cursor", "normal", "cursor-agent", _CURSOR_TAIL_HIGH),
         ("cursor", "strong", "cursor-agent", _CURSOR_TAIL_XHIGH),
         ("cursor", None, "cursor-agent", _CURSOR_TAIL_HIGH),
-        ("muse", "normal", "muse", _MUSE_TAIL_HIGH),
+        ("muse", "normal", "muse", _MUSE_TAIL_MAX),
         ("muse", "strong", "muse", _MUSE_TAIL_MAX),
-        ("muse", None, "muse", _MUSE_TAIL_HIGH),
+        ("muse", None, "muse", _MUSE_TAIL_MAX),
     ],
 )
 def test_dispatch_argv_matches_spec_per_cli_and_model(tmp_path, cli, model, binary_stem, argv_tail):
@@ -963,7 +952,7 @@ def test_muse_usage_fields_are_null_with_effort_model(tmp_path):
     )
     expected = {
         "worker_cli": "muse",
-        "model": "high",
+        "model": "max",
         "cost_usd": None,
         "input_tokens": None,
         "output_tokens": None,
