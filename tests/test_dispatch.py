@@ -10,13 +10,16 @@ from agentgraph_engine.constants import ROLE_GENERAL_PURPOSE
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from agentgraph_engine.dispatch import (
+    ATTEMPT_LOG_FILENAME,
     DISPATCH_TIMEOUT_SECONDS,
     OUTPUT_PATH_LINE_PREFIX,
+    _run_subprocess,
     RolePromptError,
     dispatch_worker,
     dispatch_with_retry,
@@ -40,9 +43,12 @@ def make_executor(write_output: bool, returncode: int = 0, envelope: dict | None
             call_log.append(argv)
         if write_output:
             # Simulate the headless worker writing its own output.md, as instructed in the
-            # combined prompt.
+            # combined prompt (via --prompt-file for muse, whose stdin is empty).
+            prompt = input_text
+            if OUTPUT_PATH_LINE_PREFIX not in prompt and "--prompt-file" in argv:
+                prompt = Path(argv[argv.index("--prompt-file") + 1]).read_text(encoding="utf-8")
             path_line = next(
-                line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+                line for line in prompt.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
             )
             out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX):].strip())
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +114,72 @@ def test_dispatch_missing_output_file_is_technical_failure(tmp_path):
     )
     assert result.ok is False
     assert result.output_exists is False
+
+
+def test_dispatch_failure_persists_exit_code_and_stderr(tmp_path):
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+
+    def executor(argv, input_text, timeout):
+        return subprocess.CompletedProcess(argv, 2, stdout="", stderr="error: unexpected argument")
+
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
+    assert result.ok is False
+    log = (output_path.parent / ATTEMPT_LOG_FILENAME).read_text(encoding="utf-8")
+    assert "exit_code: 2" in log
+    assert "error: unexpected argument" in log
+
+
+def test_dispatch_spawn_error_persists_exception_as_attempt_log(tmp_path):
+    output_path = tmp_path / "node" / "attempt-1" / "output.md"
+
+    def executor(argv, input_text, timeout):
+        raise FileNotFoundError("muse: not found")
+
+    result = dispatch_worker(
+        role=ROLE_GENERAL_PURPOSE,
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
+    assert result.ok is False
+    log = (output_path.parent / ATTEMPT_LOG_FILENAME).read_text(encoding="utf-8")
+    assert "exit_code: -1" in log
+    assert "muse: not found" in log
+
+
+def test_run_subprocess_returns_when_child_exits_despite_live_grandchild(tmp_path):
+    # Regression: with capture_output pipes, a grandchild inheriting stdio keeps
+    # communicate() waiting for EOF forever even after the child exits and wrote
+    # output.md (a worker that leaves a headless Unity editor running hung the
+    # engine for hours). File-backed stdio returns on child exit. (_run_subprocess
+    # directly: dispatch_worker cannot reach the production executor with
+    # controlled argv, since it always builds vendor argv.)
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], close_fds=False)\n"
+        "print('child done')\n",
+        encoding="utf-8",
+    )
+    proc = _run_subprocess([sys.executable, str(child)], "", timeout=20)
+    assert proc.returncode == 0
+    assert "child done" in proc.stdout
+
+
+def test_run_subprocess_timeout_kills_worker_and_reports_partial_output(tmp_path):
+    child = tmp_path / "sleeper.py"
+    child.write_text(
+        "import sys, time\nprint('started')\nsys.stdout.flush()\ntime.sleep(30)\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(subprocess.TimeoutExpired) as excinfo:
+        _run_subprocess([sys.executable, str(child)], "", timeout=3)
+    assert "started" in (excinfo.value.output or "")
 
 
 def test_dispatch_nonzero_exit_with_result_line_is_ok(tmp_path):
@@ -484,9 +556,16 @@ def test_dispatch_argv_matches_spec_per_cli_and_model(tmp_path, cli, model, bina
         assert argv[1] == "-p"
         assert OUTPUT_PATH_LINE_PREFIX in argv[2]
         assert argv[3:] == argv_tail
-    elif cli in ("muse", "cursor"):
-        # muse exec and cursor-agent -p take the prompt positionally and last —
-        # no flag may follow it.
+    elif cli == "muse":
+        # A real work order exceeds the Windows command-line limit, so muse reads it
+        # from a prompt file instead of a positional arg.
+        prompt_flag = argv.index("--prompt-file")
+        prompt_file = Path(argv[prompt_flag + 1])
+        assert OUTPUT_PATH_LINE_PREFIX in prompt_file.read_text(encoding="utf-8")
+        assert argv[1:prompt_flag] == argv_tail
+        assert not any(OUTPUT_PATH_LINE_PREFIX in arg for arg in argv)
+    elif cli == "cursor":
+        # cursor-agent -p takes the prompt positionally and last — no flag may follow it.
         assert OUTPUT_PATH_LINE_PREFIX in argv[-1]
         assert not argv[-1].startswith("-")
         assert argv[1:-1] == argv_tail
@@ -904,18 +983,25 @@ def _muse_jsonl_stdout(*, text: str, session_id: str = "01a06d3d-test-session") 
     return "\n".join(json.dumps(event) for event in events) + "\n"
 
 
-def _muse_executor(*, output_text: str, terminal_text: str, call_log: list | None = None):
+def _muse_executor(
+    *,
+    output_text: str,
+    terminal_text: str = "",
+    raw_stdout: str | None = None,
+    call_log: list | None = None,
+):
     def executor(argv, input_text, timeout):
         if call_log is not None:
             call_log.append((list(argv), input_text))
+        prompt = Path(argv[argv.index("--prompt-file") + 1]).read_text(encoding="utf-8")
         path_line = next(
-            line for line in input_text.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
+            line for line in prompt.splitlines() if line.startswith(OUTPUT_PATH_LINE_PREFIX)
         )
         out_path = Path(path_line[len(OUTPUT_PATH_LINE_PREFIX) :].strip())
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(output_text, encoding="utf-8")
         return subprocess.CompletedProcess(
-            argv, 0, stdout=_muse_jsonl_stdout(text=terminal_text), stderr=""
+            argv, 0, stdout=raw_stdout if raw_stdout is not None else _muse_jsonl_stdout(text=terminal_text), stderr=""
         )
 
     return executor
@@ -962,7 +1048,10 @@ def test_muse_single_object_stdout_passes_through_untouched(tmp_path):
         role=ROLE_GENERAL_PURPOSE,
         task_prompt="x",
         output_path=output_path,
-        executor=make_executor(write_output=True),
+        executor=_muse_executor(
+            output_text="Some prose.\nResult: done\n",
+            raw_stdout=json.dumps({"result": "chat text", "session_id": "sess-1"}),
+        ),
     )
     assert result.ok is True
     assert result.result_text == "chat text"
@@ -997,7 +1086,10 @@ def test_muse_usage_fields_are_null_with_effort_model(tmp_path):
     assert result.cost_usd is None
 
 
-def test_muse_stdin_still_carries_combined_prompt_for_executor_seam(tmp_path):
+def test_muse_stdin_is_empty_and_prompt_travels_via_prompt_file(tmp_path):
+    # `muse exec` never reads stdin: feeding the prompt to an unread pipe blocks
+    # forever once orphaned grandchildren hold the read end open, outside the
+    # dispatch timeout. The prompt travels via --prompt-file only.
     resolve_worker_cli(cli_flag="muse")
     calls: list = []
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
@@ -1013,7 +1105,8 @@ def test_muse_stdin_still_carries_combined_prompt_for_executor_seam(tmp_path):
     )
     assert result.ok is True
     argv, input_text = calls[0]
-    assert OUTPUT_PATH_LINE_PREFIX in input_text
-    assert OUTPUT_PATH_LINE_PREFIX in argv[-1]
-    assert argv[-1] == input_text
+    assert input_text == ""
+    prompt_file = Path(argv[argv.index("--prompt-file") + 1])
+    assert OUTPUT_PATH_LINE_PREFIX in prompt_file.read_text(encoding="utf-8")
+    assert not any(OUTPUT_PATH_LINE_PREFIX in arg for arg in argv)
 

@@ -20,17 +20,22 @@ and stay in graph routers. A Worker killed after writing a `Result:` line in
 `output.md` still counts as `ok` so a wall-clock timeout cannot duplicate finished work.
 Claude receives the combined prompt on stdin; Grok's `-p` requires that same
 prompt as the option value (stdin is still populated for the executor seam). `grok-orca`
-sends the combined prompt via `orca terminal send --text`, not grok argv. Cursor and Muse
-take the prompt as a positional arg (stdin is still populated for the executor seam);
+sends the combined prompt via `orca terminal send --text`, not grok argv. Cursor takes
+the prompt as a positional arg (stdin is still populated for the executor seam); Muse
+reads it from a `--prompt-file` beside the attempt output and its stdin is left empty
+(feeding an unread pipe hangs when grandchildren hold it open — no timeout covers it);
+test fakes parse the output path off the prompt file for muse.
 Muse emits JSONL, whose terminal text its `run` lifts into the envelope before parsing.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -51,6 +56,7 @@ RESULT_LINE_RE = re.compile(r"(?im)^(?:#{1,6}\s+)?Result:\s*(.+?)\s*$")
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
 USAGE_FILENAME = "usage.json"
+ATTEMPT_LOG_FILENAME = "attempt.log"
 DISPATCH_TIMEOUT_SECONDS = 7200
 
 
@@ -215,15 +221,68 @@ def attach_usage(record: dict, result: DispatchResult) -> None:
     record[USAGE_KEY] = result.usage
 
 
+def _kill_tree(proc: "subprocess.Popen[str]") -> None:
+    """Best-effort kill of a timed-out worker and its children (best effort: never raises).
+
+    On Windows the whole tree must go: a worker's grandchildren (e.g. a headless
+    Unity editor it started for tests) outlive it by design.
+    """
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=30,
+            )
+        else:
+            proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=30)
+    except Exception:
+        pass
+
+
 def _run_subprocess(argv: list, input_text: str, timeout: Optional[int]) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        argv, input=input_text, capture_output=True, text=True, timeout=timeout, encoding="utf-8"
-    )
+    """Run a worker with file-backed stdout/stderr instead of pipes.
+
+    A worker's grandchildren inherit its stdio handles (e.g. a headless Unity
+    editor kept running for tests). With `capture_output`, `communicate()` waits
+    for EOF on the pipes, which never comes while a grandchild lives — the
+    dispatch hangs even though the worker itself exited and wrote output.md.
+    With files, process exit is the only wait condition; grandchildren writing
+    to the same files afterwards is harmless.
+    """
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as out, tempfile.TemporaryFile(
+        mode="w+", encoding="utf-8", errors="replace"
+    ) as err:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=out, stderr=err, text=True)
+        try:
+            proc.communicate(input=input_text, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            out.seek(0)
+            err.seek(0)
+            raise subprocess.TimeoutExpired(proc.args, timeout, output=out.read(), stderr=err.read())
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout=out.read(), stderr=err.read())
 
 
 def _write_usage_json(output_path: Path, usage: dict) -> None:
     usage_path = output_path.parent / USAGE_FILENAME
     usage_path.write_text(json.dumps(usage), encoding="utf-8")
+
+
+def _write_attempt_log(output_path: Path, exit_code: int, stderr: str) -> None:
+    """Persist the worker's exit code and stderr beside usage.json.
+
+    Without this, a fail-fast dispatch (spawn error, usage error, prompt rejected
+    before any model call) leaves no evidence — usage.json carries no error text.
+    """
+    log_path = output_path.parent / ATTEMPT_LOG_FILENAME
+    log_path.write_text(f"exit_code: {exit_code}\n--- stderr ---\n{stderr}", encoding="utf-8")
 
 
 def dispatch_worker(
@@ -302,6 +361,7 @@ def dispatch_worker(
     except Exception as exc:  # subprocess couldn't start, etc.
         usage = build_usage(identity=identity, mapped_model=mapped_model, envelope={})
         _write_usage_json(output_path, usage)
+        _write_attempt_log(output_path, -1, str(exc))
         output_exists = output_path.exists()
         result_line = (
             extract_result_line(output_path.read_text(encoding="utf-8")) if output_exists else None
@@ -336,6 +396,7 @@ def dispatch_worker(
 
     usage = build_usage(identity=identity, mapped_model=mapped_model, envelope=envelope)
     _write_usage_json(output_path, usage)
+    _write_attempt_log(output_path, proc.returncode, proc.stderr or "")
 
     output_exists = output_path.exists()
     result_line = None

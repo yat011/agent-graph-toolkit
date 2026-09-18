@@ -160,8 +160,11 @@ the tier onto its own model/effort ladder:
   plus `--auto-review --approve-mcps --trust` (never `--force`), with the work order as
   its positional prompt (`cursor-agent -p` ignores stdin since 2026.09.10).
 - Muse: the tier as `--reasoning-effort` (both tiers `max`) on
-  `muse exec --json`, with the work order as its positional prompt (`exec` never reads
-  stdin) and `--approval-mode never --disable-sandbox --trust-workspace
+  `muse exec --json`, with the work order in a `--prompt-file` beside the attempt output
+  (a positional prompt exceeds the Windows command-line limit) and stdin left empty
+  (`exec` never reads it; feeding an unread pipe hangs when grandchildren hold it
+  open, outside the dispatch timeout) plus `--approval-mode never --disable-sandbox
+  --trust-workspace
   --user-input-auto-resolve` so a headless worker can write files, run shell commands, and
   never block on input; its `run` lifts the JSONL `run_terminal` text into the envelope
   before parsing.

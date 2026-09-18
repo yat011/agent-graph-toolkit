@@ -48,6 +48,11 @@ CURSOR_MODEL_STRONG = "cursor-grok-4.6-xhigh"
 # tiers use `max`. Recorded as the usage `model` value, like the vendor model strings above.
 MUSE_EFFORT_NORMAL = "max"
 MUSE_EFFORT_STRONG = "max"
+# A real work order as a positional prompt exceeds the Windows command-line limit
+# ("The command line is too long"), so `run` writes it to this file beside the
+# attempt's output and passes `--prompt-file` instead. It also persists the exact
+# work order for debugging, next to usage.json and attempt.log.
+MUSE_PROMPT_FILENAME = "prompt.md"
 
 _resolved_worker_cli: ContextVar[str | None] = ContextVar("agentgraph_worker_cli", default=None)
 
@@ -399,7 +404,7 @@ def _muse_terminal_result(stdout: str) -> tuple[str | None, str | None]:
 
 
 class MuseWorkerCli:
-    """Worker CLI identity: Muse Code headless `muse exec --json` with a positional prompt."""
+    """Worker CLI identity: Muse Code headless `muse exec --json` with `--prompt-file`."""
 
     identity = WORKER_CLI_MUSE
     binary = WORKER_CLI_MUSE
@@ -412,13 +417,12 @@ class MuseWorkerCli:
         }[tier]
 
     def argv(self, resolved_binary: str, mapped_model: str, prompt: str) -> list[str]:
-        # `exec` reads the prompt from its positional arg (never stdin) and emits JSONL
-        # events on stdout, not one JSON object. Headless workers must never block on
-        # approval or interactive input, and must write files plus run shell commands, so
-        # approval is off, the sandbox is off, and user-input prompts auto-resolve.
-        # `--trust-workspace` gives the worker this workspace's skills/rules, the parity
-        # with what a `claude -p` worker loads by default. The prompt stays last: it is
-        # positional, so no flag may follow it.
+        # `prompt` is the path to a file holding the work order (written by `run`).
+        # `exec` emits JSONL events on stdout, not one JSON object. Headless workers
+        # must never block on approval or interactive input, and must write files plus
+        # run shell commands, so approval is off, the sandbox is off, and user-input
+        # prompts auto-resolve. `--trust-workspace` gives the worker this workspace's
+        # skills/rules, the parity with what a `claude -p` worker loads by default.
         return [
             resolved_binary,
             "exec",
@@ -430,6 +434,7 @@ class MuseWorkerCli:
             "--user-input-auto-resolve",
             "--reasoning-effort",
             mapped_model,
+            "--prompt-file",
             prompt,
         ]
 
@@ -447,7 +452,12 @@ class MuseWorkerCli:
         executor: WorkerExecutor,
         output_path: Path,
     ) -> subprocess.CompletedProcess:
-        proc = executor(self.argv(resolved_binary, mapped_model, prompt), prompt, timeout)
+        prompt_path = output_path.parent / MUSE_PROMPT_FILENAME
+        prompt_path.write_text(prompt, encoding="utf-8")
+        # stdin stays empty: `muse exec` never reads it, and feeding the prompt to
+        # an unread pipe blocks forever once orphaned grandchildren (e.g. a headless
+        # Unity editor) hold the read end open — outside the dispatch timeout.
+        proc = executor(self.argv(resolved_binary, mapped_model, str(prompt_path)), "", timeout)
         text, session_id = _muse_terminal_result(proc.stdout or "")
         if text is None and session_id is None:
             return proc
