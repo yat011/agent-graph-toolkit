@@ -14,7 +14,7 @@ Judge the **assembled** feature, not a single phase:
 - Cross-phase seams — types, naming, error policy, or wiring that drifted between phases.
 - Integration — scene/prefab/UI/PlayMode behavior that scoped phase tests would not prove.
 
-Skip Fowler smell-baseline hunting already in scope of a phase reviewer unless a seam makes it
+Skip Standards-baseline hunting (smells + impossible guards) already in scope of a phase reviewer unless a seam makes it
 newly visible. Do not re-litigate accepted phase nits.
 
 Inputs (work order lists paths): spec, plan, every implementer `handoff.md`, additional-test

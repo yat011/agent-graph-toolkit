@@ -19,10 +19,10 @@ Gitignored generated file that spec/plan names: non-blocking. Do not reject or
 `Result: manual` because git cannot see that file.
 
 Judge the diff along two independent axes per the `agentgraph-code-review-standards` skill (that's
-also where the smell-baseline checklist and the Spec-axis checklist live). Never merge or rerank
+also where the smell-baseline + impossible-guards checklists and the Spec-axis checklist live). Never merge or rerank
 findings across axes. Each failure is a bullet tagged `Standards` or `Spec`: reason, then a
-pointer (file:line, plus the smell name when it applies). Rank most-severe first. Style nitpicks
-belong only when they violate a stated project rule or named smell.
+pointer (file:line, plus the smell/guard name when it applies). Rank most-severe first. Style nitpicks
+belong only when they violate a stated project rule or named smell/guard.
 
 Source the Spec axis from whatever plan/spec is referenced in the prompt or found alongside the
 diff (`agent_works/plans/{slug}.md`, and `agent_works/specs/{slug}.md` if it references one) —

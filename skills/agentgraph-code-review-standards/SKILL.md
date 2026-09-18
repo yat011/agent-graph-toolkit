@@ -1,6 +1,6 @@
 ---
 name: agentgraph-code-review-standards
-description: Two-axis (Standards vs Spec) review structure plus a Fowler smell-baseline checklist. Use when reviewing a diff against project conventions and the originating spec/plan.
+description: Two-axis (Standards vs Spec) review structure plus Fowler smell-baseline and impossible-guards checklists. Use when reviewing a diff against project conventions and the originating spec/plan.
 ---
 
 # Code Review Standards
@@ -20,7 +20,7 @@ breaks a project convention. An axis with no findings is omitted.
 
 - **Standards** — does the diff follow this repo's documented conventions (its own CLAUDE.md or
   equivalent: SOLID/DRY, no duplicate code, no defensive null checks, whatever file/language
-  scope restrictions it declares) plus the smell baseline below?
+  scope restrictions it declares) plus the baselines below (smells + impossible guards)?
 - **Spec** — does the diff faithfully implement what the plan/spec asked for?
 
 ## Standards: smell baseline
@@ -43,6 +43,23 @@ enforces:
 - **Middle Man** — a class/function that mostly just delegates onward.
 - **Refused Bequest** — a subclass/implementer that ignores or overrides most of what it inherits.
 
+## Standards: impossible guards (over-guarding)
+
+The Fowler list above does not catch over-guarding, so check it explicitly. A guard (if/else,
+early return, null check, try/except) is justified only for an expected scenario — one the
+caller or input can legitimately produce, e.g. an optional None param the signature allows or
+empty user input the program must tolerate.
+
+- Delete the branch when the guarded case is dependency-impossible (the type, contract, or
+  upstream code makes it unreachable).
+- Let a broken invariant crash loudly at the broken site; do not absorb it in a defensive
+  branch downstream.
+- Keep a guard only when you can name the expected scenario that reaches it.
+
+Flag as `Standards` (Impossible guard): quote the guard, state why the case is impossible
+(type/contract/upstream pointer), and say delete vs narrow-to-expected-case. Like the smells
+above, this is a judgement call, and the project's own explicit rules win on conflict.
+
 ## Spec: what to check
 
 - Requirements the spec/plan asked for that are missing or partial.
@@ -52,5 +69,5 @@ enforces:
   widened tolerances, missing coverage for a stated requirement) — a real finding, not a nitpick.
 
 Point at the spec/plan location (section or heading) for each Spec finding, and file:line (plus
-the smell name, if applicable) for each Standards finding. Each finding is a bullet: reason, then
+the smell/guard name, if applicable) for each Standards finding. Each finding is a bullet: reason, then
 that pointer.
