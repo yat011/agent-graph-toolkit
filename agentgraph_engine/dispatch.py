@@ -297,8 +297,9 @@ def dispatch_worker(
     """Dispatch one stateless Worker call.
 
     The combined prompt is: the role's persona text (`agents/{role}.md`, frontmatter stripped) +
-    the node's own `task_prompt` + caveman-full output.md voice (Result line minimum, never
-    recap, file:line pointers) + an instruction to write that output to `output_path`. A
+    the node's own `task_prompt` + structured-report output.md voice (Result line plus the
+    node's required evidence sections, file:line pointers, no padding) + an instruction to
+    write that output to `output_path`. A
     fresh headless CLI process has no notion of a Claude-Code "subagent type",
     so this is how a Node's declared `agent:` role is carried into the dispatch without inventing
     an undocumented CLI flag.
@@ -320,9 +321,9 @@ def dispatch_worker(
 
     parts = []
     parts.append(
-        "Always use caveman skill full mode. "
-        "output.md minimum: one-line `Result: {xxx}` plus this node's extra required lines only. "
-        "Never recap. Cite file:line pointers instead of restated content. "
+        "Write output.md as a structured evidence report: a `Result: {xxx}` line plus this "
+        "node's extra required sections only, no recap, no padding. Cite file:line pointers "
+        "instead of restated content. "
         "Keep Result: line, paths, commands, code, and error strings exact.\n"
         "Before you finish, MUST use file-write tool to create the file below with that "
         "output as its content — chat reply alone not enough, next step finds work from this file.\n"

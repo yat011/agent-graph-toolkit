@@ -59,7 +59,7 @@ def make_executor(write_output: bool, returncode: int = 0, envelope: dict | None
     return executor
 
 
-def test_dispatch_prompt_sets_caveman_full_output_voice(tmp_path):
+def test_dispatch_prompt_sets_structured_report_voice(tmp_path):
     output_path = tmp_path / "node" / "attempt-1" / "output.md"
     captured: dict[str, str] = {}
 
@@ -81,12 +81,13 @@ def test_dispatch_prompt_sets_caveman_full_output_voice(tmp_path):
     )
     assert result.ok is True
     text = captured["text"]
-    assert "caveman skill full" in text
+    assert "structured evidence report" in text
     assert "Keep Result: line" in text
-    assert "Never recap" in text
+    assert "no recap, no padding" in text
     assert "file:line" in text
-    assert "one-line `Result: {xxx}`" in text
-    assert text.index("caveman skill full") < text.index(OUTPUT_PATH_LINE_PREFIX)
+    assert "`Result: {xxx}`" in text
+    assert "caveman" not in text
+    assert text.index("structured evidence report") < text.index(OUTPUT_PATH_LINE_PREFIX)
 
 
 def test_dispatch_success_reads_result_line_from_output_file(tmp_path):
@@ -877,7 +878,7 @@ def test_grok_orca_dispatch_drives_orca_create_wait_send_wait_close(tmp_path, mo
     assert "--enter" in send
     assert send[send.index("--terminal") + 1] == ORCA_CREATE_HANDLE
     prompt = send[send.index("--text") + 1]
-    assert "caveman skill full" in prompt
+    assert "structured evidence report" in prompt
     assert OUTPUT_PATH_LINE_PREFIX in prompt
 
     for wait in (calls[1], calls[3]):

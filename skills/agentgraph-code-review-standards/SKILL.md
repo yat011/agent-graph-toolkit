@@ -67,6 +67,15 @@ above, this is a judgement call, and the project's own explicit rules win on con
 - Requirements that look implemented but where the implementation looks wrong.
 - Tests that would still pass if the spec's requirement were violated (loosened assertions,
   widened tolerances, missing coverage for a stated requirement) — a real finding, not a nitpick.
+- Sufficiency, not just execution: a diff that faithfully executes the plan still fails when
+  the plan's approach cannot produce the required behavior on the reported repro path.
+- Repro-path fidelity: tests must exercise the production interaction the bug was reported on
+  (or a fixture that explicitly names the production path it replicates). Green on a different
+  path proves nothing.
+- New assertions must assert the spec's acceptance, not plan intermediates — tests that lock in
+  behavior the spec never asked for fail even when they pass.
+- Config/serialized-value fixes: survey sibling assets for the operative setting before
+  accepting that the changed lines are the complete mechanism.
 
 Point at the spec/plan location (section or heading) for each Spec finding, and file:line (plus
 the smell/guard name, if applicable) for each Standards finding. Each finding is a bullet: reason, then

@@ -22,7 +22,16 @@ stdout/stderr summary, phase outcomes (Result lines only), and a branch diff sum
 `git diff <merge-base>...HEAD` for files you need. Do **not** open phase implementer `output.md`
 or phase reviewer `output.md` beyond those Result lines.
 
-If you genuinely find nothing after looking, write only the Result line.
+Every implementer handoff carries a `## Human follow-ups` section. Consolidate them into a
+single checklist in your report: each item states what needs a person and whether it is
+verified (evidence in this run), filed (tracker sub-issue reference), or open. An open item
+that blocks the spec's acceptance is a blocking `Spec` finding: if you have tracker tools,
+file it as a sub-issue of the originating issue first, then record the reference; otherwise
+end `Result: manual` with the checklist so the main agent files it before Done. A feature
+with open human follow-ups is never `Result: accepted`.
+
+If you genuinely find nothing after looking, write the Result line plus the human-follow-ups
+checklist (or "none" when every handoff says none).
 
 Each blocking finding is a bullet tagged `Spec` or `Seam` (or `Standards` only when a seam
 makes a convention break newly visible): reason, then a pointer (spec/plan heading or file:line).

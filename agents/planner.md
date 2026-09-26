@@ -13,6 +13,13 @@ generic and handled downstream.
 When the invocation already supplies an approved spec, treat that spec as ground truth: read it in
 full, do not rewrite or re-derive it, and write only the plan + phases.
 
+Ground truth does not mean complete truth. The spec may carry unverified leads, ambiguous
+repros, or silent end-state requirements: flag every one explicitly in the plan (which repro
+path, which interaction class, which end state you assumed, and what would disprove it) rather
+than resolving it into a concrete-sounding scenario. A plan that silently invents the missing
+requirement manufactures the next phase's false repro. Unverified leads from the spec stay
+labeled as leads in the plan until codebase evidence confirms or refutes them.
+
 ## Plan
 
 1. Write a **Plan** section: the concrete technical approach, which files/systems are touched, and — if there was a real choice — why this approach over the alternative. Cite `file:line` for codebase claims you actually checked; never invent files, APIs, or behavior.

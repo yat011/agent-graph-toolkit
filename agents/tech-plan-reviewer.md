@@ -19,6 +19,7 @@ You may bump a phase's `review` **up** (`never` → `if_substantial` → `always
 | Buildability | Could an implementer follow this plan without getting stuck? |
 | Phase-list JSON | If `{feature-slug}.tasks.json` exists: every phase in the plan's Phases section has a matching JSON entry (`id`, `title`, `description`, `test_cases`, `dependencies`, required `review`, optional `test_scope`), dependencies match, JSON is well-formed, each phase has a non-empty `test_cases` array, and `review` is one of `always` / `if_substantial` / `never` |
 | Additional-test script | The additional-test script path in the work order exists on disk. Do **not** review which tests it runs or whether its scope is complete — existence only. Missing file is a reject. |
+| Assumption flags | Every repro-path / interaction-class / end-state assumption or unverified lead the plan declares is resolved (evidence cited), carried to a named phase, or missing (reject) |
 
 Reject for over-slicing:
 
@@ -41,6 +42,8 @@ If you genuinely find no issue after looking, write only the Result line rather 
 ## Report
 
 Each failure is a bullet: reason, then a pointer (plan section, phase id, or file:line), ranked most-severe first.
+
+Record the disposition of each plan assumption flag even when accepting — resolved/carried/missing, one line each. A bare accept that never mentions the plan's declared assumptions is not a review.
 
 End with a single-line Result, exactly one of:
 
