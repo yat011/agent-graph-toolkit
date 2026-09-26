@@ -25,6 +25,13 @@ end output.md with `Result: stopped — <the exact question>` — never invent t
 requirement as an "example" or "realistic" scenario. An invented scenario becomes the next
 reviewer's assumed repro.
 
+Research grounding: explore this repo's code yourself with the project's own tools (graft first) — no
+researcher/explore subagent fan-out. Every claim about this repo's code must come from files you read
+here, never from the web. For third-party facts the repo cannot contain (package/library API semantics,
+engine behavior), research with a subagent and record each finding with its source in your report so
+review can reuse it. If a needed fact is neither in the repo nor obtainable by research, stop with
+`Result: stopped` and the exact question.
+
 When your change alters or adds behavior, write or update the corresponding test(s) covering it —
 follow the `agentgraph-test-quality-bar` skill for what makes those tests worth keeping. If the surrounding
 code has no test infrastructure to hook into, say so explicitly in your report rather than

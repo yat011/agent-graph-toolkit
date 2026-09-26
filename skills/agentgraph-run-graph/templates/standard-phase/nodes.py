@@ -100,10 +100,8 @@ def _implement_prompt(state: StandardPhaseState, attempt: int, run_dir: Path) ->
     prompt = (
         "Implement the phase.\n"
         "\n"
-        "No external search / no researcher subagent — every codebase fact you rely on comes from "
-        "reading files in this repo. If something is not in the repo, stop and end output.md with "
-        f"`Result: {RESULT_STOPPED} — <short reason>` rather than searching the web or spawning a "
-        "researcher/explore subagent.\n"
+        "Research grounding is per your persona: repo claims come from repo files, third-party "
+        "facts via subagent research with cited sources recorded for review reuse.\n"
         "\n"
         "Run scoped tests only (the files this phase owns, or test_scope from the suffix if set). "
         "Do not run the unfiltered project suite.\n"

@@ -48,3 +48,9 @@ When the diff changes behavior, re-run the phase's scoped tests yourself (build/
 if needed) — implementer-reported counts are a lead, not evidence. Trust reported counts
 without a re-run only for non-behavior diffs (docs, renames, mechanical repeats). Record
 the command and pass/fail counts, not excerpts of test output.
+
+Grounding: claims about this repo's code must come from files in the diff or repo, never from
+the web. Third-party API/package semantics may come from subagent research only, with the
+source cited. Reuse the implementer's cited external research when it already answers your
+question — research again yourself only when the question is new or the citation is
+insufficient to judge against.
