@@ -24,6 +24,7 @@ from agentgraph_engine.dispatch import (
     dispatch_worker,
     dispatch_with_retry,
     extract_result_line,
+    load_project_overlay,
     load_role_prompt,
     preflight_role_prompts,
     required_roles_from_graph_path,
@@ -88,6 +89,92 @@ def test_dispatch_prompt_sets_structured_report_voice(tmp_path):
     assert "`Result: {xxx}`" in text
     assert "caveman" not in text
     assert text.index("structured evidence report") < text.index(OUTPUT_PATH_LINE_PREFIX)
+
+
+def _write_project_overlay(root: Path, role: str, body: str) -> Path:
+    path = root / ".claude" / "agents" / f"{role}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    (root / ".git").mkdir(exist_ok=True)
+    return path
+
+
+def test_dispatch_prompt_appends_project_overlay_after_persona(tmp_path):
+    overlay_path = _write_project_overlay(
+        tmp_path, "reviewer",
+        "---\nname: reviewer\npermission_mode: auto\n---\n\n"
+        "- Inherit from: ~/.claude/agents/reviewer.md\n\n"
+        "Project Specific:\n- Project rule: snapshots are required evidence.\n",
+    )
+    output_path = tmp_path / "run" / "attempt-1" / "output.md"
+    captured: dict[str, str] = {}
+
+    def executor(argv, input_text, timeout):
+        captured["text"] = input_text
+        out_path = output_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text("Result: done\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
+
+    result = dispatch_worker(
+        role="reviewer",
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
+    assert result.ok is True
+    text = captured["text"]
+    assert "Project-specific additions for role `reviewer`" in text
+    assert "On conflict with the persona above, these win." in text
+    assert str(overlay_path) in text
+    assert "Project rule: snapshots are required evidence." in text
+    assert "permission_mode" not in text
+    assert "Inherit from" not in text
+    assert text.index("You review code") < text.index("Project-specific additions")
+    assert text.index("Project-specific additions") < text.index("do the thing")
+
+
+def test_dispatch_prompt_without_overlay_has_no_project_section(tmp_path):
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    output_path = tmp_path / "run" / "attempt-1" / "output.md"
+    captured: dict[str, str] = {}
+
+    def executor(argv, input_text, timeout):
+        captured["text"] = input_text
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text("Result: done\n", encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, stdout='{"result":""}', stderr="")
+
+    result = dispatch_worker(
+        role="reviewer",
+        task_prompt="do the thing",
+        output_path=output_path,
+        executor=executor,
+    )
+    assert result.ok is True
+    assert "Project-specific additions" not in captured["text"]
+
+
+def test_load_project_overlay_nearest_wins_and_stops_at_git(tmp_path):
+    _write_project_overlay(tmp_path, "reviewer", "Outer rule.\n")
+    inner = tmp_path / "sub"
+    inner_overlay = _write_project_overlay(inner, "reviewer", "Inner rule.\n")
+    body, source = load_project_overlay("reviewer", inner / "run" / "output.md")
+    assert body == "Inner rule."
+    assert source == inner_overlay
+    # An overlay above the .git boundary never leaks into the project below it.
+    proj = tmp_path / "proj"
+    (proj / ".git").mkdir(parents=True, exist_ok=True)
+    assert load_project_overlay("reviewer", proj / "run" / "output.md") == ("", None)
+
+
+def test_load_project_overlay_missing_empty_and_no_persona(tmp_path):
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    assert load_project_overlay("reviewer", tmp_path / "output.md") == ("", None)
+    _write_project_overlay(tmp_path, "reviewer", "---\nname: reviewer\n---\n")
+    assert load_project_overlay("reviewer", tmp_path / "output.md") == ("", None)
+    _write_project_overlay(tmp_path, ROLE_GENERAL_PURPOSE, "Some rule.\n")
+    assert load_project_overlay(ROLE_GENERAL_PURPOSE, tmp_path / "output.md") == ("", None)
 
 
 def test_dispatch_success_reads_result_line_from_output_file(tmp_path):

@@ -55,6 +55,10 @@ RESULT_LINE_RE = re.compile(r"(?im)^(?:#{1,6}\s+)?Result:\s*(.+?)\s*$")
 # agents/{role}.md lives two levels up from this file (repo_root/agentgraph_engine/dispatch.py).
 AGENTS_DIR = Path(__file__).resolve().parent.parent / "agents"
 
+# Project-level role refinements, e.g. <project>/.claude/agents/reviewer.md. Loaded as an
+# overlay on top of the engine persona (project wins on conflict).
+PROJECT_AGENTS_DIRNAME = Path(".claude/agents")
+
 USAGE_FILENAME = "usage.json"
 ATTEMPT_LOG_FILENAME = "attempt.log"
 DISPATCH_TIMEOUT_SECONDS = 7200
@@ -120,6 +124,18 @@ _NESTED_GRAPH_RE = re.compile(
 )
 
 
+def _strip_frontmatter(body: str) -> str:
+    """Drop a leading YAML frontmatter block (`---` ... `---`), if present."""
+    if body.startswith("---"):
+        end = body.find("\n---", 3)
+        if end != -1:
+            body = body[end + 4 :]
+    return body.strip()
+
+
+_INHERIT_FROM_RE = re.compile(r"^\s*[-*]?\s*Inherit from\s*:", re.IGNORECASE)
+
+
 def load_role_prompt(role: str) -> str:
     """Read agents/{role}.md (frontmatter stripped) for combining into a headless prompt.
 
@@ -132,17 +148,46 @@ def load_role_prompt(role: str) -> str:
     path = AGENTS_DIR / f"{role}.md"
     if not path.exists():
         raise RolePromptError(f"Missing role prompt for {role!r}: {path} does not exist")
-    body = path.read_text(encoding="utf-8")
-    if body.startswith("---"):
-        end = body.find("\n---", 3)
-        if end != -1:
-            body = body[end + 4 :]
-    body = body.strip()
+    body = _strip_frontmatter(path.read_text(encoding="utf-8"))
     if not body:
         raise RolePromptError(
             f"Empty role prompt for {role!r}: {path} has no body after frontmatter"
         )
     return body
+
+
+def load_project_overlay(role: str, start: Path | str) -> tuple[str, Path | None]:
+    """Read the project's own `.claude/agents/{role}.md` overlay, if one exists.
+
+    Walks up from `start` (a file or directory — pass the node's output path) and
+    takes the nearest `.claude/agents/{role}.md`, stopping after the directory that
+    holds `.git` (the project boundary: a home-global config above the repo must not
+    leak in mislabeled as project-specific). Returns (body, source path), or
+    ("", None) when no overlay exists, the role takes no persona, or the file is
+    empty after frontmatter strip. Never raises for a missing file: projects
+    without overlays behave exactly as before.
+
+    `Inherit from:` lines are dropped: in engine runs the engine persona above is
+    the base, so the home-config inheritance chain those lines name does not apply.
+    """
+    if role in NO_PERSONA_ROLES:
+        return "", None
+    here = Path(start)
+    if not here.is_dir():
+        here = here.parent
+    for candidate_dir in [here, *here.parents]:
+        candidate = candidate_dir / PROJECT_AGENTS_DIRNAME / f"{role}.md"
+        if candidate.is_file():
+            lines = _strip_frontmatter(candidate.read_text(encoding="utf-8")).splitlines()
+            body = "\n".join(
+                line for line in lines if not _INHERIT_FROM_RE.match(line)
+            ).strip()
+            if not body:
+                return "", None
+            return body, candidate
+        if (candidate_dir / ".git").exists():
+            return "", None
+    return "", None
 
 
 def scan_roles_in_source(source: str) -> list[str]:
@@ -297,6 +342,8 @@ def dispatch_worker(
     """Dispatch one stateless Worker call.
 
     The combined prompt is: the role's persona text (`agents/{role}.md`, frontmatter stripped) +
+    the project's own `.claude/agents/{role}.md` overlay when one exists above the output path
+    (project wins on conflict) +
     the node's own `task_prompt` + structured-report output.md voice (Result line plus the
     node's required evidence sections, file:line pointers, no padding) + an instruction to
     write that output to `output_path`. A
@@ -314,6 +361,7 @@ def dispatch_worker(
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    overlay_body, overlay_source = load_project_overlay(role, output_path)
 
     identity = current_worker_cli()
     vendor_cli = worker_cli_for(identity)
@@ -330,6 +378,11 @@ def dispatch_worker(
     )
     if persona:
         parts.append(persona)
+    if overlay_body:
+        parts.append(
+            f"Project-specific additions for role `{role}` (from {overlay_source}). "
+            "On conflict with the persona above, these win.\n\n" + overlay_body
+        )
     parts.append(task_prompt.strip())
     # One place for every LLM node: output.md voice. Path line stays last so test fakes can parse it.
     parts.append(f"{OUTPUT_PATH_LINE_PREFIX}{output_path}")
